@@ -243,5 +243,81 @@ def convert(
         click.echo(f"  {fmt}: {path}")
 
 
+@cli.command()
+@click.argument("input_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output file path (default: input_file with -festival-planner suffix)",
+)
+@click.option(
+    "--year",
+    type=int,
+    default=None,
+    help="Year for date parsing (default: from settings)",
+)
+@click.option(
+    "--no-smart-parsing",
+    is_flag=True,
+    default=False,
+    help="Disable intelligent performer/producer/show parsing",
+)
+@click.pass_context
+def export(
+    ctx: click.Context,
+    input_file: Path,
+    output: Path | None,
+    year: int | None,
+    no_smart_parsing: bool,
+) -> None:
+    """Export scraped data to Festival Planner format.
+
+    Converts raw scraped CSV to the standard format expected by Festival Planner,
+    with columns: performer, producer, show_name, venue_name, date, start_time,
+    end_time, availability
+
+    Smart parsing (enabled by default) intelligently separates:
+    - Production companies into the 'producer' field
+    - Performer names from titles like "Mark Watson: Show Title"
+
+    Examples:
+
+        edfringe-scrape export data/raw/2026-02-11-EdFringe-COMEDY.csv
+
+        edfringe-scrape export data/raw/shows.csv -o data/festival-planner/comedy.csv
+
+        edfringe-scrape export data/raw/shows.csv --no-smart-parsing
+    """
+    settings = ctx.obj["settings"]
+    default_year = year if year else settings.default_year
+    smart_parsing = not no_smart_parsing
+
+    if output is None:
+        output = input_file.with_name(
+            input_file.stem + "-festival-planner" + input_file.suffix
+        )
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    click.echo("Exporting to Festival Planner format")
+    click.echo(f"  Input: {input_file}")
+    click.echo(f"  Output: {output}")
+    click.echo(f"  Year: {default_year}")
+    click.echo(f"  Smart parsing: {'enabled' if smart_parsing else 'disabled'}")
+
+    converter = FringeConverter(default_year=default_year)
+    df = converter.load_raw_csv(input_file)
+
+    click.echo(f"  Loaded {len(df)} rows")
+
+    df_export = converter.to_festival_planner_format(df, smart_parsing=smart_parsing)
+
+    df_export.to_csv(output, index=False)
+
+    click.echo(f"\nExported {len(df_export)} performances to {output}")
+
+
 if __name__ == "__main__":
     cli()

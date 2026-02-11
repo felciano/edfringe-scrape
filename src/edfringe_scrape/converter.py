@@ -203,6 +203,360 @@ class FringeConverter:
         safe_text = str(text).replace('"', '""')
         return f'=HYPERLINK("{url}", "{safe_text}")'
 
+    def to_festival_planner_format(
+        self, df: pd.DataFrame, smart_parsing: bool = True
+    ) -> pd.DataFrame:
+        """Convert to Festival Planner standard format.
+
+        Transforms scraped data to the format expected by Festival Planner:
+        - performer, producer, show_name, venue_name, date, start_time, end_time, availability
+
+        Args:
+            df: Raw scraped DataFrame
+            smart_parsing: If True, intelligently separate performer/producer/show_name
+
+        Returns:
+            DataFrame in Festival Planner format
+        """
+        df = df.copy()
+        rows = []
+
+        for _, row in df.iterrows():
+            # Parse date
+            date_iso = self._parse_date(row.get("date", ""))
+            if not date_iso:
+                continue
+
+            # Parse time range
+            time_str = row.get("performance-time", "")
+            start_time, end_time = self._parse_time_range(time_str)
+
+            # Map availability
+            raw_availability = row.get("show-availability", "")
+            availability = self._map_availability(raw_availability)
+
+            # Parse performer/producer/show_name
+            raw_presenter = row.get("show-performer", "")
+            raw_title = row.get("show-name", "")
+
+            if smart_parsing:
+                performer, producer, show_name = self._parse_performer_producer_show(
+                    raw_presenter, raw_title
+                )
+            else:
+                performer = raw_presenter
+                producer = ""
+                show_name = raw_title
+
+            rows.append(
+                {
+                    "performer": performer,
+                    "producer": producer,
+                    "show_name": show_name,
+                    "original_show_name": raw_title,
+                    "venue_name": row.get("show-location", ""),
+                    "date": date_iso,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "availability": availability,
+                }
+            )
+
+        result = pd.DataFrame(rows)
+        logger.info(f"Converted {len(result)} rows to Festival Planner format")
+        return result
+
+    def _parse_time_range(self, time_str: str) -> tuple[str, str]:
+        """Parse time range like '19:30 - 20:30' into start and end times.
+
+        Args:
+            time_str: Time range string
+
+        Returns:
+            Tuple of (start_time, end_time) in HH:MM format
+        """
+        if not time_str or not isinstance(time_str, str):
+            return "", ""
+
+        # Handle various separators
+        import re
+
+        parts = re.split(r"\s*[-–]\s*", time_str.strip())
+
+        start_time = parts[0].strip() if parts else ""
+        end_time = parts[1].strip() if len(parts) > 1 else ""
+
+        return start_time, end_time
+
+    def _map_availability(self, raw: str) -> str:
+        """Map scraper availability values to Festival Planner format.
+
+        Args:
+            raw: Raw availability string (e.g., TICKETS_AVAILABLE)
+
+        Returns:
+            Festival Planner format (e.g., tickets-available)
+        """
+        if not raw or not isinstance(raw, str):
+            return "tickets-available"
+
+        mapping = {
+            "TICKETS_AVAILABLE": "tickets-available",
+            "TWO_FOR_ONE": "2-for-1-show",
+            "SOLD_OUT": "sold-out",
+            "CANCELLED": "cancelled",
+            "PREVIEW": "preview-show",
+            "FREE_TICKETED": "free-show",
+            "FREE": "free-show",
+            "NO_ALLOCATION": "sold-out",
+            "NO_ALLOCATION_REMAINING": "sold-out",
+        }
+
+        return mapping.get(raw.upper(), "tickets-available")
+
+    def _is_production_company(self, name: str) -> bool:
+        """Detect if a name is likely a production company rather than a performer.
+
+        Args:
+            name: The presenter/performer name to check
+
+        Returns:
+            True if the name appears to be a production company
+        """
+        if not name or not isinstance(name, str):
+            return False
+
+        name_lower = name.lower().strip()
+
+        # Common production company patterns
+        company_patterns = [
+            " presents",
+            " present",
+            " productions",
+            " comedy",
+            " management",
+            " entertainment",
+            " ltd",
+            " limited",
+            " inc",
+            " llc",
+            " touring",
+            " theatre",
+            " theater",
+            " arts",
+            " promotions",
+            " agency",
+            " creative",
+            " media",
+            " group",
+            " collective",
+            " ensemble",
+            " worldwide",
+            " talent",
+            " live",
+            " agents",
+            " nation",
+            "free festival",
+            "free fringe",
+            "laughing horse",
+            "pleasance",
+            "gilded balloon",
+            "underbelly",
+            "assembly",
+            "summerhall",
+            "zoo",
+            "just the tonic",
+            "mick perrin",
+            "united agents",
+            "live nation",
+            "seabright",
+            "avalon",
+            "off the kerb",
+            "phil mcintyre",
+            "berk's nest",
+        ]
+
+        # Check for common patterns
+        for pattern in company_patterns:
+            if pattern in name_lower:
+                return True
+
+        # Check for "X & Y" pattern with company keywords
+        if " & " in name_lower or " and " in name_lower:
+            # Could be a duo or a company - check for company keywords
+            if any(
+                kw in name_lower
+                for kw in ["productions", "presents", "entertainment", "management"]
+            ):
+                return True
+
+        # Check for "AEG", "PBJ", "WME" style abbreviations (all caps, 2-4 letters)
+        name_parts = name.split()
+        if len(name_parts) >= 1:
+            first_part = name_parts[0]
+            if (
+                first_part.isupper()
+                and 2 <= len(first_part) <= 4
+                and first_part.isalpha()
+            ):
+                # Likely an agency abbreviation like "AEG Presents", "PBJ Management"
+                if len(name_parts) > 1:
+                    return True
+
+        return False
+
+    def _extract_performer_from_title(self, title: str) -> tuple[str, str]:
+        """Extract performer name from title if it follows 'Performer: Show Title' pattern.
+
+        Args:
+            title: The show title
+
+        Returns:
+            Tuple of (performer_name, remaining_title). If no pattern found,
+            returns ("", original_title)
+        """
+        if not title or not isinstance(title, str):
+            return "", title or ""
+
+        # Check for colon separator (common pattern: "Mark Watson: Before It Overtakes Us")
+        if ":" in title:
+            parts = title.split(":", 1)
+            potential_performer = parts[0].strip()
+            remaining_title = parts[1].strip() if len(parts) > 1 else ""
+
+            # Validate that the part before colon looks like a performer name
+            # (not a subtitle like "Comedy: A Journey" or "Part 1: The Beginning")
+            if self._looks_like_performer_name(potential_performer):
+                return potential_performer, remaining_title
+
+        return "", title
+
+    def _looks_like_performer_name(self, text: str) -> bool:
+        """Check if text looks like a performer name rather than a subtitle.
+
+        Args:
+            text: Text to check
+
+        Returns:
+            True if it looks like a performer name
+        """
+        if not text:
+            return False
+
+        text_lower = text.lower()
+        text_stripped = text.strip()
+
+        # Reject common subtitle patterns
+        subtitle_patterns = [
+            "part ",
+            "act ",
+            "episode",
+            "chapter",
+            "volume",
+            "vol ",
+            "season",
+            "series",
+            "the ",
+            "a ",
+            "an ",
+            "live",
+            "work in progress",
+            "wip",
+            "preview",
+            "encore",
+            "returns",
+            "reloaded",
+        ]
+
+        for pattern in subtitle_patterns:
+            if text_lower.startswith(pattern) or text_lower == pattern.strip():
+                return False
+
+        # Reject all-caps abbreviations (likely show acronyms like "CSI", "NYC")
+        if text_stripped.isupper() and len(text_stripped) <= 5:
+            return False
+
+        # Performer names typically:
+        # - Are 1-4 words
+        # - Start with capital letter
+        # - Don't contain numbers (usually)
+        words = text.split()
+        if len(words) > 5:
+            return False
+
+        # Check for typical name patterns
+        # Allow "Dr.", "Sir", "Dame", etc.
+        if words and words[0][0].isupper():
+            return True
+
+        return False
+
+    def _parse_performer_producer_show(
+        self, presenter: str, title: str
+    ) -> tuple[str, str, str]:
+        """Intelligently parse performer, producer, and show name.
+
+        Logic:
+        1. If presenter is a production company, it becomes producer
+        2. If title has "Performer: Show Title" format, extract performer from title
+        3. Otherwise, presenter is the performer
+        4. If multiple performers are identified, combine them comma-delimited
+
+        Args:
+            presenter: The show-performer field from scraped data
+            title: The show-name field from scraped data
+
+        Returns:
+            Tuple of (performer, producer, show_name)
+        """
+        performers: list[str] = []
+        producer = ""
+        show_name = title
+
+        # First, check if presenter is a production company
+        if self._is_production_company(presenter):
+            producer = presenter
+
+            # Try to extract performer from title
+            extracted_performer, remaining_title = self._extract_performer_from_title(
+                title
+            )
+            if extracted_performer:
+                performers.append(extracted_performer)
+                show_name = remaining_title
+            # else: performers stays empty, show_name stays as original title
+        else:
+            # Presenter is likely the performer
+            if presenter:
+                performers.append(presenter)
+
+            # Still check if title has embedded performer (might be different)
+            extracted_performer, remaining_title = self._extract_performer_from_title(
+                title
+            )
+            if extracted_performer:
+                # Check if extracted performer is different from presenter
+                if not presenter:
+                    performers.append(extracted_performer)
+                    show_name = remaining_title
+                elif extracted_performer.lower() in presenter.lower():
+                    # Same performer, just use the cleaned title
+                    show_name = remaining_title
+                elif presenter.lower() in extracted_performer.lower():
+                    # Presenter is subset of extracted (e.g., "John" vs "John Smith")
+                    # Use the more complete name
+                    performers = [extracted_performer]
+                    show_name = remaining_title
+                else:
+                    # Different performers - add both
+                    performers.append(extracted_performer)
+                    show_name = remaining_title
+
+        # Combine performers as comma-delimited list
+        performer = ", ".join(performers)
+
+        return performer, producer, show_name
+
 
 def save_all_formats(
     df: pd.DataFrame,

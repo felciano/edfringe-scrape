@@ -172,3 +172,218 @@ class TestSaveAllFormats:
             assert "summary" in results
             assert "cleaned" not in results
             assert results["summary"].exists()
+
+
+class TestFestivalPlannerExport:
+    """Test Festival Planner format export."""
+
+    @pytest.fixture
+    def converter(self) -> FringeConverter:
+        """Create converter with year 2026."""
+        return FringeConverter(default_year=2026)
+
+    @pytest.fixture
+    def sample_scraped_df(self) -> pd.DataFrame:
+        """Create sample scraped DataFrame."""
+        return pd.DataFrame(
+            {
+                "show-name": ["Comedy Show", "Drama Play"],
+                "show-performer": ["John Smith", "Jane Doe"],
+                "show-location": ["Main Stage", "Side Room"],
+                "date": ["Thursday 06 August", "Friday 07 August"],
+                "performance-time": ["19:30 - 20:30", "14:00 - 15:30"],
+                "show-availability": ["TICKETS_AVAILABLE", "TWO_FOR_ONE"],
+            }
+        )
+
+    def test_to_festival_planner_format(
+        self, converter: FringeConverter, sample_scraped_df: pd.DataFrame
+    ) -> None:
+        """Test conversion to Festival Planner format."""
+        result = converter.to_festival_planner_format(
+            sample_scraped_df, smart_parsing=False
+        )
+
+        assert len(result) == 2
+        assert list(result.columns) == [
+            "performer",
+            "producer",
+            "show_name",
+            "original_show_name",
+            "venue_name",
+            "date",
+            "start_time",
+            "end_time",
+            "availability",
+        ]
+
+        row1 = result.iloc[0]
+        assert row1["performer"] == "John Smith"
+        assert row1["producer"] == ""
+        assert row1["show_name"] == "Comedy Show"
+        assert row1["original_show_name"] == "Comedy Show"
+        assert row1["venue_name"] == "Main Stage"
+        assert row1["date"] == "2026-08-06"
+        assert row1["start_time"] == "19:30"
+        assert row1["end_time"] == "20:30"
+        assert row1["availability"] == "tickets-available"
+
+        row2 = result.iloc[1]
+        assert row2["availability"] == "2-for-1-show"
+
+    def test_map_availability(self, converter: FringeConverter) -> None:
+        """Test availability mapping."""
+        assert converter._map_availability("TICKETS_AVAILABLE") == "tickets-available"
+        assert converter._map_availability("TWO_FOR_ONE") == "2-for-1-show"
+        assert converter._map_availability("SOLD_OUT") == "sold-out"
+        assert converter._map_availability("CANCELLED") == "cancelled"
+        assert converter._map_availability("PREVIEW") == "preview-show"
+        assert converter._map_availability("FREE_TICKETED") == "free-show"
+        assert converter._map_availability("") == "tickets-available"
+        assert converter._map_availability("UNKNOWN") == "tickets-available"
+
+    def test_parse_time_range(self, converter: FringeConverter) -> None:
+        """Test time range parsing."""
+        assert converter._parse_time_range("19:30 - 20:30") == ("19:30", "20:30")
+        assert converter._parse_time_range("14:00 – 15:30") == ("14:00", "15:30")
+        assert converter._parse_time_range("19:30") == ("19:30", "")
+        assert converter._parse_time_range("") == ("", "")
+
+    def test_is_production_company(self, converter: FringeConverter) -> None:
+        """Test production company detection."""
+        # Should be detected as production companies
+        assert converter._is_production_company("Impatient Productions")
+        assert converter._is_production_company("AEG Presents")
+        assert converter._is_production_company("PBJ Management")
+        assert converter._is_production_company("Live Nation Entertainment")
+        assert converter._is_production_company("Laughing Horse @ Bar 50")
+        assert converter._is_production_company("Pleasance")
+        assert converter._is_production_company("Assembly")
+        assert converter._is_production_company("Gilded Balloon")
+        assert converter._is_production_company("Free Festival")
+        assert converter._is_production_company("Just The Tonic")
+        assert converter._is_production_company("Off The Kerb Productions")
+
+        # Should NOT be detected as production companies (actual performers)
+        assert not converter._is_production_company("John Smith")
+        assert not converter._is_production_company("Mark Watson")
+        assert not converter._is_production_company("Sarah Millican")
+        assert not converter._is_production_company("The Mighty Boosh")
+        assert not converter._is_production_company("")
+
+    def test_extract_performer_from_title(self, converter: FringeConverter) -> None:
+        """Test performer extraction from title."""
+        # Should extract performer
+        assert converter._extract_performer_from_title(
+            "Mark Watson: Before It Overtakes Us"
+        ) == ("Mark Watson", "Before It Overtakes Us")
+        assert converter._extract_performer_from_title(
+            "Sarah Millican: Control Enthusiast"
+        ) == ("Sarah Millican", "Control Enthusiast")
+        assert converter._extract_performer_from_title("John Smith: The Show") == (
+            "John Smith",
+            "The Show",
+        )
+
+        # Should NOT extract (subtitle patterns)
+        assert converter._extract_performer_from_title("Part 1: The Beginning") == (
+            "",
+            "Part 1: The Beginning",
+        )
+        assert converter._extract_performer_from_title("Live: From Edinburgh") == (
+            "",
+            "Live: From Edinburgh",
+        )
+        assert converter._extract_performer_from_title(
+            "The Comedy Show: A Journey"
+        ) == ("", "The Comedy Show: A Journey")
+
+        # No colon
+        assert converter._extract_performer_from_title("Just A Show Title") == (
+            "",
+            "Just A Show Title",
+        )
+        assert converter._extract_performer_from_title("") == ("", "")
+
+    def test_parse_performer_producer_show_with_production_company(
+        self, converter: FringeConverter
+    ) -> None:
+        """Test parsing when presenter is a production company."""
+        # Production company with performer in title
+        performer, producer, show = converter._parse_performer_producer_show(
+            "Impatient Productions", "Mark Watson: Before It Overtakes Us"
+        )
+        assert performer == "Mark Watson"
+        assert producer == "Impatient Productions"
+        assert show == "Before It Overtakes Us"
+
+        # Production company without performer in title
+        performer, producer, show = converter._parse_performer_producer_show(
+            "AEG Presents", "The Big Comedy Show"
+        )
+        assert performer == ""
+        assert producer == "AEG Presents"
+        assert show == "The Big Comedy Show"
+
+    def test_parse_performer_producer_show_with_performer(
+        self, converter: FringeConverter
+    ) -> None:
+        """Test parsing when presenter is the actual performer."""
+        # Performer name in presenter, no colon in title
+        performer, producer, show = converter._parse_performer_producer_show(
+            "John Smith", "The Funniest Hour"
+        )
+        assert performer == "John Smith"
+        assert producer == ""
+        assert show == "The Funniest Hour"
+
+        # Performer name in presenter, matching name in title
+        performer, producer, show = converter._parse_performer_producer_show(
+            "Mark Watson", "Mark Watson: Before It Overtakes Us"
+        )
+        assert performer == "Mark Watson"
+        assert producer == ""
+        assert show == "Before It Overtakes Us"
+
+    def test_smart_parsing_in_export(self, converter: FringeConverter) -> None:
+        """Test smart parsing is applied during export."""
+        df = pd.DataFrame(
+            {
+                "show-name": ["Mark Watson: Before It Overtakes Us"],
+                "show-performer": ["Impatient Productions"],
+                "show-location": ["Pleasance Courtyard"],
+                "date": ["Thursday 06 August"],
+                "performance-time": ["19:30 - 20:30"],
+                "show-availability": ["TICKETS_AVAILABLE"],
+            }
+        )
+
+        result = converter.to_festival_planner_format(df, smart_parsing=True)
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["performer"] == "Mark Watson"
+        assert row["producer"] == "Impatient Productions"
+        assert row["show_name"] == "Before It Overtakes Us"
+        assert row["original_show_name"] == "Mark Watson: Before It Overtakes Us"
+
+    def test_multiple_performers(self, converter: FringeConverter) -> None:
+        """Test that multiple performers are combined comma-delimited."""
+        # Case: presenter is a performer, and title has a different performer
+        performer, producer, show = converter._parse_performer_producer_show(
+            "Jane Doe", "John Smith: The Big Show"
+        )
+        assert performer == "Jane Doe, John Smith"
+        assert producer == ""
+        assert show == "The Big Show"
+
+    def test_same_performer_in_title_and_presenter(
+        self, converter: FringeConverter
+    ) -> None:
+        """Test that same performer is not duplicated."""
+        performer, producer, show = converter._parse_performer_producer_show(
+            "Mark Watson", "Mark Watson: Before It Overtakes Us"
+        )
+        assert performer == "Mark Watson"
+        assert producer == ""
+        assert show == "Before It Overtakes Us"
