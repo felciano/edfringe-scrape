@@ -1,0 +1,16 @@
+# edfringe-scrape environment configuration
+# Copy to .envrc and run `direnv allow`
+
+# Load non-secret config from TOML
+if [[ -f config.toml ]]; then
+  eval "$(python3 -c "
+import tomllib
+with open('config.toml', 'rb') as f:
+    for k, v in tomllib.load(f).items():
+        print(f'export EDFRINGE_{k}={v!r}')
+")"
+fi
+
+# Load secrets from 1Password
+# Uncomment and configure as needed:
+# export EDFRINGE_API_KEY=$(op read "op://GitHub-Actions/edfringe-scrape/api-key")

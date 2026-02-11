@@ -1,0 +1,14 @@
+# edfringe-scrape Configuration
+# Copy to config.toml and customize for local development
+
+# Logging verbosity: DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL = "INFO"
+
+# Enable debug mode (more verbose output, detailed errors)
+DEBUG = false
+
+# Output directory for scraped data
+OUTPUT_DIR = "output"
+
+# Edinburgh Fringe website base URL (usually no need to change)
+BASE_URL = "https://www.edfringe.com"
