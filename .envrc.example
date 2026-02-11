@@ -14,3 +14,9 @@ fi
 # Load secrets from 1Password
 # Scraping Dog API key (required for scraping)
 export EDFRINGE_SCRAPINGDOG_API_KEY=$(op read "op://Private/Scraping Dog/credential")
+
+# Email credentials for daily updates (optional)
+# For Gmail, use an App Password: https://myaccount.google.com/apppasswords
+# export EDFRINGE_SMTP_USER=$(op read "op://Private/Gmail SMTP/username")
+# export EDFRINGE_SMTP_PASSWORD=$(op read "op://Private/Gmail SMTP/password")
+# export EDFRINGE_EMAIL_TO="you@example.com"

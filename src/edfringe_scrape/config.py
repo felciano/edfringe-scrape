@@ -47,6 +47,38 @@ class Settings(BaseSettings):
         description="Default year for date parsing",
     )
 
+    # Email settings for daily updates
+    email_to: str | None = Field(
+        default=None,
+        description="Recipient email address for daily updates",
+    )
+    email_from: str | None = Field(
+        default=None,
+        description="Sender email address (defaults to smtp_user)",
+    )
+    smtp_host: str = Field(
+        default="smtp.gmail.com",
+        description="SMTP server hostname",
+    )
+    smtp_port: int = Field(
+        default=587,
+        description="SMTP server port (587 for TLS, 465 for SSL)",
+    )
+    smtp_user: str | None = Field(
+        default=None,
+        description="SMTP username",
+    )
+    smtp_password: str | None = Field(
+        default=None,
+        description="SMTP password or app password (from 1Password)",
+    )
+
+    # Snapshot settings
+    snapshot_dir: str = Field(
+        default="data/snapshots",
+        description="Directory for daily snapshots",
+    )
+
 
 def get_settings() -> Settings:
     """Get application settings.

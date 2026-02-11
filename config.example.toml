@@ -22,3 +22,12 @@ JS_WAIT_MS = 5000
 
 # Default year for date parsing (e.g., "Wednesday 30 July" -> 2026-07-30)
 DEFAULT_YEAR = 2026
+
+# Snapshot directory for daily snapshots
+SNAPSHOT_DIR = "data/snapshots"
+
+# Email settings for daily updates
+# EMAIL_TO = "you@example.com"
+# EMAIL_FROM = "fringe-updates@example.com"  # Optional, defaults to SMTP_USER
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
