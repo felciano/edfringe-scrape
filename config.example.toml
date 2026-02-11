@@ -8,7 +8,17 @@ LOG_LEVEL = "INFO"
 DEBUG = false
 
 # Output directory for scraped data
-OUTPUT_DIR = "output"
+OUTPUT_DIR = "data/raw"
 
 # Edinburgh Fringe website base URL (usually no need to change)
 BASE_URL = "https://www.edfringe.com"
+
+# Scraping Dog settings
+# Delay between requests in milliseconds (rate limiting)
+REQUEST_DELAY_MS = 2000
+
+# JavaScript rendering wait time in milliseconds (max 35000)
+JS_WAIT_MS = 5000
+
+# Default year for date parsing (e.g., "Wednesday 30 July" -> 2026-07-30)
+DEFAULT_YEAR = 2026

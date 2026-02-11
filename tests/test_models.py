@@ -5,7 +5,30 @@ from datetime import date, time
 import pytest
 from pydantic import ValidationError
 
-from edfringe_scrape.models import Performance, Show
+from edfringe_scrape.models import (
+    Genre,
+    Performance,
+    PerformanceDetail,
+    RawPerformanceRow,
+    ScrapedShow,
+    Show,
+    ShowCard,
+)
+
+
+class TestGenre:
+    """Test Genre enum."""
+
+    def test_genre_values(self) -> None:
+        """Test Genre enum has expected values."""
+        assert Genre.COMEDY.value == "COMEDY"
+        assert Genre.MUSICALS.value == "MUSICALS"
+        assert Genre.THEATRE.value == "THEATRE"
+
+    def test_url_param(self) -> None:
+        """Test url_param property."""
+        assert Genre.COMEDY.url_param == "COMEDY"
+        assert Genre.CHILDRENS_SHOWS.url_param == "CHILDRENS_SHOWS"
 
 
 class TestShow:
@@ -62,3 +85,78 @@ class TestPerformance:
         )
         assert perf.time is None
         assert perf.availability is None
+
+
+class TestRawPerformanceRow:
+    """Test RawPerformanceRow model with aliases."""
+
+    def test_from_csv_columns(self) -> None:
+        """Test creating from CSV column names."""
+        row = RawPerformanceRow(
+            **{
+                "show-link-href": "https://www.edfringe.com/shows/123",
+                "show-link": "Comedy Night",
+                "show-name": "Comedy Night",
+                "show-performer": "John Smith",
+                "date": "Wednesday 30 July",
+                "performance-time": "19:30 - 20:30",
+                "show-availability": "Available",
+                "show-location": "Pleasance Courtyard",
+            }
+        )
+        assert row.show_link_href == "https://www.edfringe.com/shows/123"
+        assert row.show_name == "Comedy Night"
+        assert row.date == "Wednesday 30 July"
+
+
+class TestShowCard:
+    """Test ShowCard model."""
+
+    def test_valid_show_card(self) -> None:
+        """Test creating show card."""
+        card = ShowCard(
+            title="Comedy Night",
+            url="https://www.edfringe.com/shows/123",
+            performer="John Smith",
+            duration="1hr 15mins",
+        )
+        assert card.title == "Comedy Night"
+        assert card.performer == "John Smith"
+
+
+class TestPerformanceDetail:
+    """Test PerformanceDetail model."""
+
+    def test_valid_detail(self) -> None:
+        """Test creating performance detail."""
+        detail = PerformanceDetail(
+            date=date(2025, 8, 1),
+            start_time=time(19, 30),
+            end_time=time(20, 30),
+            availability="Available",
+            venue="Pleasance Courtyard",
+        )
+        assert detail.date == date(2025, 8, 1)
+        assert detail.start_time == time(19, 30)
+
+
+class TestScrapedShow:
+    """Test ScrapedShow model."""
+
+    def test_valid_scraped_show(self) -> None:
+        """Test creating scraped show."""
+        show = ScrapedShow(
+            title="Comedy Night",
+            url="https://www.edfringe.com/shows/123",
+            performer="John Smith",
+            genre=Genre.COMEDY,
+            performances=[
+                PerformanceDetail(
+                    date=date(2025, 8, 1),
+                    start_time=time(19, 30),
+                )
+            ],
+        )
+        assert show.title == "Comedy Night"
+        assert show.genre == Genre.COMEDY
+        assert len(show.performances) == 1

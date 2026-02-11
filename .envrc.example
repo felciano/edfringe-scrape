@@ -12,5 +12,5 @@ with open('config.toml', 'rb') as f:
 fi
 
 # Load secrets from 1Password
-# Uncomment and configure as needed:
-# export EDFRINGE_API_KEY=$(op read "op://GitHub-Actions/edfringe-scrape/api-key")
+# Scraping Dog API key (required for scraping)
+export EDFRINGE_SCRAPINGDOG_API_KEY=$(op read "op://Private/Scraping Dog/credential")
