@@ -28,6 +28,18 @@ edfringe-scrape --help
 
 # Show configuration
 edfringe-scrape info
+
+# Update canonical current-state files (incremental, recent additions only)
+edfringe-scrape update -g COMEDY,MUSICALS
+
+# Full scrape for a genre (replaces all data for that genre)
+edfringe-scrape update -g COMEDY --full
+
+# Scrape a single genre to date-stamped files
+edfringe-scrape scrape -g COMEDY
+
+# Take a daily snapshot and compare with previous
+edfringe-scrape daily-snapshot -g COMEDY,THEATRE --email
 ```
 
 ## Development

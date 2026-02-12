@@ -26,6 +26,9 @@ DEFAULT_YEAR = 2026
 # Snapshot directory for daily snapshots
 SNAPSHOT_DIR = "data/snapshots"
 
+# Directory for canonical current-state files (used by `update` command)
+CURRENT_DIR = "data/current"
+
 # Email settings for daily updates
 # EMAIL_TO = "you@example.com"
 # EMAIL_FROM = "fringe-updates@example.com"  # Optional, defaults to SMTP_USER

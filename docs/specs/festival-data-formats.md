@@ -13,6 +13,9 @@ This document describes every output file produced by edfringe-scrape.
 | `convert` | `Summary-{FILENAME}.csv` | 1 per show | output_dir |
 | `convert` | `WideFormat-{FILENAME}.csv` | 1 per show+time | output_dir |
 | `export` | `{FILENAME}-festival-planner.csv` | 1 per performance | output_dir |
+| `update` | `performances.csv` | 1 per performance | current_dir |
+| `update` | `show-info.csv` | 1 per show | current_dir |
+| `update` | `venue-info.csv` | 1 per venue (cached) | current_dir |
 | `daily-snapshot` | `{DATE}-fringe-snapshot.csv` | 1 per performance | snapshot_dir |
 | `daily-snapshot` | `{DATE}-fringe-show-info.csv` | 1 per show | snapshot_dir |
 | `daily-snapshot` | `venue-info.csv` | 1 per venue (cached) | snapshot_dir |
@@ -194,7 +197,45 @@ Date columns are generated dynamically based on the dates present in the data. E
 
 ---
 
-## 8. Daily Snapshot
+## 8. Canonical Current-State Files
+
+**Directory:** `data/current/` (configurable via `current_dir` setting)
+**Command:** `update`
+
+The `update` command maintains three canonical files representing the latest known state of all scraped data. Unlike date-stamped files, these are updated in-place on each run.
+
+### Modes
+
+- **`--recent`** (default): Scrapes with `recentlyAdded=LAST_SEVEN_DAYS`, merges into existing files. Existing data for non-matching keys is preserved (never removed).
+- **`--full`**: Replaces all performance data for scraped genres; other genres are untouched. Show info is always additive in both modes.
+
+### Files
+
+**`performances.csv`** — Same schema as raw scraped data (section 1) with an additional `genre` column. One row per performance. Keyed on `show-link-href` + `date` + `performance-time`.
+
+**`show-info.csv`** — Same schema as section 2. One row per show. Keyed on `show-link-href`.
+
+**`venue-info.csv`** — Same schema as section 3. One row per venue, cached.
+
+### Directory Structure
+
+```
+data/current/
+├── performances.csv    # All performances across genres
+├── show-info.csv       # All show metadata across genres
+└── venue-info.csv      # Venue cache (persistent)
+```
+
+### Merge Behavior
+
+| Mode | Performances | Show Info | Venues |
+|------|-------------|-----------|--------|
+| `--recent` | Upsert by key (new overwrites matching; non-matching preserved) | Upsert by URL | Append new only |
+| `--full` | Replace all rows for scraped genres; other genres preserved | Upsert by URL | Append new only |
+
+---
+
+## 9. Daily Snapshot
 
 **File:** `{YYYY-MM-DD}-fringe-snapshot.csv`
 **Command:** `daily-snapshot`
@@ -210,7 +251,7 @@ The snapshot also produces `{DATE}-fringe-show-info.csv` (same schema as section
 
 ---
 
-## 9. Comparison Report
+## 10. Comparison Report
 
 **File:** user-specified with `-o` flag, or printed to stdout
 **Command:** `compare`
@@ -229,6 +270,15 @@ The HTML format includes color-coded sections and clickable show links, suitable
 ---
 
 ## Directory Structure
+
+The `update` command maintains canonical current-state files:
+
+```
+data/current/
+├── performances.csv    # All performances across genres (merged)
+├── show-info.csv       # All show metadata across genres (merged)
+└── venue-info.csv      # Venue cache (persistent)
+```
 
 A typical scrape run produces:
 

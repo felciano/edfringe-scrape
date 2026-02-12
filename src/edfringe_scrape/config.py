@@ -79,6 +79,12 @@ class Settings(BaseSettings):
         description="Directory for daily snapshots",
     )
 
+    # Current/canonical data settings
+    current_dir: str = Field(
+        default="data/current",
+        description="Directory for canonical current-state files",
+    )
+
 
 def get_settings() -> Settings:
     """Get application settings.

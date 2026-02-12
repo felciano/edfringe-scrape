@@ -21,8 +21,12 @@ This is a living document. Update as the architecture evolves.
 #### CLI (`cli.py`)
 Entry point for user interaction. Uses Click for command parsing. Commands include:
 - `info` - Show current configuration
-- `scrape` - Run scraper for specified categories (future)
-- `convert` - Transform raw data to output formats (future)
+- `scrape` - Run scraper for a single genre to date-stamped files
+- `update` - Maintain canonical current-state files in `data/current/` with incremental (`--recent`) or full (`--full`) scraping across multiple genres
+- `daily-snapshot` - Take a timestamped snapshot and compare with previous
+- `convert` - Transform raw data to cleaned/summary/wide formats
+- `export` - Export to Festival Planner format
+- `compare` - Compare two snapshots and report changes
 
 #### Configuration (`config.py`)
 Pydantic Settings for environment-based configuration. Loaded via direnv from `config.toml` and 1Password.
@@ -30,6 +34,8 @@ Pydantic Settings for environment-based configuration. Loaded via direnv from `c
 Key settings:
 - `base_url` - Edinburgh Fringe website URL
 - `output_dir` - Where to write output files
+- `current_dir` - Where to write canonical current-state files (default: `data/current/`)
+- `snapshot_dir` - Where to write daily snapshots
 
 #### Models (`models.py`)
 Pydantic models for data validation and serialization:

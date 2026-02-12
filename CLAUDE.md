@@ -32,6 +32,15 @@ uv run ruff format .       # Format code
 uv run ruff check . --fix  # Lint and fix
 ```
 
+## Key Commands
+
+- `update` — Maintain canonical current-state files in `data/current/` (supports `--recent` incremental and `--full` modes)
+- `scrape` — Scrape a single genre to date-stamped files
+- `daily-snapshot` — Take a timestamped snapshot with optional email notifications
+- `convert` — Transform raw CSV to cleaned/summary/wide formats
+- `export` — Export to Festival Planner format
+- `compare` — Diff two snapshots
+
 ## Configuration
 
 Settings are managed via Pydantic Settings with `EDFRINGE_` prefix.

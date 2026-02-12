@@ -27,3 +27,19 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(cli, ["-v", "info"])
         assert result.exit_code == 0
+
+    def test_update_help(self) -> None:
+        """Test update command help output."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update", "--help"])
+        assert result.exit_code == 0
+        assert "Update canonical current-state files" in result.output
+        assert "--full" in result.output
+        assert "--recent" in result.output
+
+    def test_update_no_api_key(self) -> None:
+        """Test update command fails without API key."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["update"])
+        assert result.exit_code != 0
+        assert "API key not configured" in result.output

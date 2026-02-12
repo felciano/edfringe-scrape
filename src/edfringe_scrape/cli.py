@@ -10,10 +10,16 @@ import pandas as pd
 from .config import get_settings
 from .converter import FringeConverter, save_all_formats
 from .core import (
+    PERFORMANCE_COLUMNS,
+    SHOW_INFO_COLUMNS,
     FringeScraper,
     collect_venues,
     ensure_output_dir,
+    load_canonical,
     load_venue_cache,
+    merge_performances,
+    merge_show_info,
+    save_canonical,
     save_raw_csv,
     save_show_info_csv,
     save_venue_cache,
@@ -669,6 +675,247 @@ def daily_snapshot(
                 click.echo("Email sent successfully!")
             else:
                 click.echo("Failed to send email.", err=True)
+
+
+@cli.command()
+@click.option(
+    "-g",
+    "--genres",
+    type=str,
+    default="COMEDY",
+    help="Comma-separated list of genres to scrape (default: COMEDY)",
+)
+@click.option(
+    "--full/--recent",
+    default=False,
+    help="Full scrape (replace genre data) or recent only (default: recent)",
+)
+@click.option(
+    "--max-shows",
+    type=int,
+    default=None,
+    help="Maximum shows per genre (default: all)",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output directory for canonical files (default: from settings)",
+)
+@click.pass_context
+def update(
+    ctx: click.Context,
+    genres: str,
+    full: bool,
+    max_shows: int | None,
+    output: Path | None,
+) -> None:
+    """Update canonical current-state files with latest Fringe data.
+
+    Maintains canonical files in data/current/ representing the latest known
+    state of all shows, performances, and venues.
+
+    In recent mode (default), scrapes only recently added shows and merges
+    into existing data. In full mode, replaces all data for the specified
+    genres.
+
+    Examples:
+
+        edfringe-scrape update -g COMEDY,MUSICALS
+
+        edfringe-scrape update -g COMEDY --full
+
+        edfringe-scrape update -g COMEDY --max-shows 5
+    """
+    settings = ctx.obj["settings"]
+
+    if not settings.scrapingdog_api_key:
+        raise click.ClickException(
+            "Scraping Dog API key not configured. "
+            "Set EDFRINGE_SCRAPINGDOG_API_KEY or run 'edfringe-scrape info' for help."
+        )
+
+    # Parse and validate genres
+    genre_list = [g.strip().upper() for g in genres.split(",")]
+    valid_genres = [g.value for g in Genre]
+    for g in genre_list:
+        if g not in valid_genres:
+            raise click.ClickException(
+                f"Invalid genre: {g}. Valid genres: {', '.join(valid_genres)}"
+            )
+
+    # Setup output directory
+    current_dir = output if output else Path(settings.current_dir)
+    current_dir.mkdir(parents=True, exist_ok=True)
+
+    mode_label = "full" if full else "recent"
+    recently_added = None if full else "LAST_SEVEN_DAYS"
+
+    scrape_start_time = datetime.now()
+
+    click.echo("Edinburgh Fringe Update")
+    click.echo(f"  Mode: {mode_label}")
+    click.echo(f"  Genres: {', '.join(genre_list)}")
+    click.echo(f"  Output: {current_dir}")
+    if max_shows:
+        click.echo(f"  Max shows per genre: {max_shows}")
+    click.echo("")
+
+    # Scrape all genres
+    all_perf_dfs = []
+    all_info_dfs = []
+    all_shows = []
+    scraper = FringeScraper(settings)
+
+    for genre_str in genre_list:
+        genre_enum = Genre(genre_str)
+        click.echo(f"Scraping {genre_enum.value}...")
+
+        try:
+            show_cards = list(
+                scraper.fetch_all_search_results(
+                    genre_enum, max_shows, recently_added=recently_added
+                )
+            )
+            click.echo(f"  Found {len(show_cards)} shows")
+
+            if show_cards:
+                click.echo("  Fetching details...")
+                shows = []
+                with click.progressbar(
+                    show_cards,
+                    label="  Processing",
+                    show_pos=True,
+                    item_show_func=lambda c: c.title[:30] if c else "",
+                ) as cards:
+                    for card in cards:
+                        show = scraper.fetch_show_with_details(card, genre_enum)
+                        shows.append(show)
+
+                all_shows.extend(shows)
+
+                source_url = (
+                    f"{settings.base_url}/tickets/whats-on"
+                    f"?search=true&genres={genre_str}"
+                )
+                perf_df = shows_to_dataframe(
+                    shows, source_url=source_url, scrape_time=scrape_start_time
+                )
+                perf_df["genre"] = genre_str
+                all_perf_dfs.append(perf_df)
+
+                info_df = show_info_to_dataframe(shows)
+                if not info_df.empty:
+                    all_info_dfs.append(info_df)
+
+                perf_count = sum(len(s.performances) for s in shows)
+                click.echo(f"  {len(shows)} shows, {perf_count} performances")
+
+        except ScrapingDogError as e:
+            click.echo(f"  Error scraping {genre_enum.value}: {e}", err=True)
+
+        click.echo("")
+
+    if not all_perf_dfs:
+        click.echo("No data scraped!")
+        return
+
+    # Combine new data
+    new_perf_df = pd.concat(all_perf_dfs, ignore_index=True)
+    new_info_df = (
+        pd.concat(all_info_dfs, ignore_index=True) if all_info_dfs
+        else pd.DataFrame(columns=SHOW_INFO_COLUMNS)
+    )
+
+    # Load existing canonical files
+    perf_path = current_dir / "performances.csv"
+    info_path = current_dir / "show-info.csv"
+
+    existing_perf = load_canonical(perf_path, PERFORMANCE_COLUMNS)
+    existing_info = load_canonical(info_path, SHOW_INFO_COLUMNS)
+
+    # Merge
+    merged_perf = merge_performances(existing_perf, new_perf_df, full_mode=full)
+    merged_info = merge_show_info(existing_info, new_info_df)
+
+    # Stats
+    perf_before = len(existing_perf)
+    perf_after = len(merged_perf)
+    perf_new_updated = perf_after - perf_before + len(new_perf_df) - (perf_after - perf_before)
+    # Count how many rows in new_perf_df matched existing keys (overwrites)
+    perf_new_updated = len(new_perf_df)
+
+    info_before = len(existing_info)
+    info_after = len(merged_info)
+    info_new_updated = len(new_info_df)
+
+    # Save
+    save_canonical(merged_perf, perf_path)
+    save_canonical(merged_info, info_path)
+
+    click.echo(f"Performances: {perf_after} total ({perf_new_updated} new/updated)")
+    click.echo(f"Shows: {info_after} total ({info_new_updated} new/updated)")
+
+    # Venue info using existing cache pattern
+    venue_cache_path = current_dir / "venue-info.csv"
+    scraped_venues = collect_venues(all_shows)
+    cached_venues = load_venue_cache(venue_cache_path)
+    cached_codes = set(cached_venues.keys())
+    new_codes = set(scraped_venues.keys()) - cached_codes
+
+    if new_codes:
+        click.echo(f"\nFetching venue details for {len(new_codes)} new venues...")
+        new_venues = {
+            c: v for c, v in scraped_venues.items() if c in new_codes
+        }
+        with click.progressbar(
+            list(new_venues.keys()),
+            label="  Venues",
+            show_pos=True,
+            item_show_func=lambda c: (
+                new_venues[c].venue_name[:30] if c and c in new_venues else ""
+            ),
+        ) as codes:
+            for code in codes:
+                venue = new_venues[code]
+                if venue.venue_page_url:
+                    try:
+                        response = scraper.client.fetch_page(
+                            venue.venue_page_url, dynamic=True
+                        )
+                        from .parser import NextDataParser
+
+                        venue_page_data = (
+                            NextDataParser.extract_venue_page_data(
+                                response.html
+                            )
+                        )
+                        if venue_page_data:
+                            phone, email_addr = (
+                                NextDataParser.parse_venue_contact(
+                                    venue_page_data
+                                )
+                            )
+                            new_venues[code] = venue.model_copy(
+                                update={
+                                    "contact_phone": phone,
+                                    "contact_email": email_addr,
+                                }
+                            )
+                    except Exception:
+                        pass
+
+        cached_venues.update(new_venues)
+    else:
+        for code, venue in scraped_venues.items():
+            if code not in cached_venues:
+                cached_venues[code] = venue
+
+    save_venue_cache(cached_venues, venue_cache_path)
+    click.echo(
+        f"Venues: {len(cached_venues)} total ({len(new_codes)} new)"
+    )
 
 
 @cli.command()

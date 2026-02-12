@@ -48,6 +48,7 @@ class FringeScraper:
         genre: Genre,
         max_shows: int | None = None,
         skip_details: bool = False,
+        recently_added: str | None = None,
     ) -> Iterator[ScrapedShow]:
         """Scrape all shows for a genre.
 
@@ -70,7 +71,7 @@ class FringeScraper:
                 logger.info(f"Reached max_shows limit ({max_shows})")
                 break
 
-            cards = self._fetch_search_page(genre, page)
+            cards = self._fetch_search_page(genre, page, recently_added)
 
             if not cards:
                 logger.info(f"No more results on page {page}")
@@ -104,7 +105,12 @@ class FringeScraper:
 
         logger.info(f"Scraped {show_count} shows for {genre.value}")
 
-    def _fetch_search_page(self, genre: Genre, page: int) -> list[ShowCard]:
+    def _fetch_search_page(
+        self,
+        genre: Genre,
+        page: int,
+        recently_added: str | None = None,
+    ) -> list[ShowCard]:
         """Fetch and parse a search results page.
 
         Args:
@@ -118,6 +124,9 @@ class FringeScraper:
             f"{self.settings.base_url}/tickets/whats-on"
             f"?search=true&genres={genre.url_param}"
         )
+
+        if recently_added:
+            url += f"&recentlyAdded={recently_added}"
 
         if page > 1:
             url += f"&page={page}"
@@ -233,12 +242,14 @@ class FringeScraper:
         self,
         genre: Genre,
         max_shows: int | None = None,
+        recently_added: str | None = None,
     ) -> Iterator[ShowCard]:
         """Fetch all show cards from search results pages.
 
         Args:
             genre: Genre to search
             max_shows: Maximum shows to return (None for all)
+            recently_added: Filter value (e.g. "LAST_SEVEN_DAYS")
 
         Yields:
             ShowCard objects
@@ -251,7 +262,7 @@ class FringeScraper:
             if max_shows and show_count >= max_shows:
                 break
 
-            cards = self._fetch_search_page(genre, page)
+            cards = self._fetch_search_page(genre, page, recently_added)
 
             if not cards:
                 break
@@ -548,3 +559,166 @@ def save_venue_cache(
     df.to_csv(cache_path, index=False)
     logger.info(f"Saved {len(df)} venues to {cache_path}")
     return cache_path
+
+
+# Column schemas for canonical CSV files
+PERFORMANCE_COLUMNS = [
+    "web-scraper-scrape-time",
+    "show-link-href",
+    "show-link",
+    "show-name",
+    "show-performer",
+    "date",
+    "performance-time",
+    "show-availability",
+    "show-location",
+    "web-scraper-start-url",
+    "genre",
+]
+
+SHOW_INFO_COLUMNS = [
+    "show-link-href",
+    "show-name",
+    "genre",
+    "subgenres",
+    "description",
+    "warnings",
+    "age_suitability",
+    "image_url",
+    "website",
+    "facebook",
+    "instagram",
+    "tiktok",
+    "youtube",
+    "twitter",
+    "bluesky",
+    "mastodon",
+]
+
+
+def load_canonical(path: Path, expected_columns: list[str]) -> pd.DataFrame:
+    """Load a canonical CSV file, or return an empty DataFrame with expected schema.
+
+    Args:
+        path: Path to CSV file
+        expected_columns: Column names for the empty DataFrame fallback
+
+    Returns:
+        DataFrame with data or empty DataFrame with correct columns
+    """
+    if path.exists():
+        df = pd.read_csv(path)
+        # Ensure all expected columns exist (fill missing with empty string)
+        for col in expected_columns:
+            if col not in df.columns:
+                df[col] = ""
+        return df
+    return pd.DataFrame(columns=expected_columns)
+
+
+def save_canonical(df: pd.DataFrame, path: Path) -> Path:
+    """Save a DataFrame to a canonical CSV file, creating parent dirs.
+
+    Args:
+        df: DataFrame to save
+        path: Output file path
+
+    Returns:
+        Path to saved file
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    logger.info(f"Saved {len(df)} rows to {path}")
+    return path
+
+
+def merge_performances(
+    existing_df: pd.DataFrame,
+    new_df: pd.DataFrame,
+    full_mode: bool = False,
+) -> pd.DataFrame:
+    """Merge new performance data into existing canonical data.
+
+    Key: show-link-href + date + performance-time
+
+    Args:
+        existing_df: Existing canonical performances
+        new_df: Newly scraped performances
+        full_mode: If True, replace all data for scraped genres;
+                   if False, upsert by key (preserving non-matching rows)
+
+    Returns:
+        Merged DataFrame sorted by genre, show URL, date, time
+    """
+    if new_df.empty:
+        return existing_df.copy()
+
+    def _perf_key(df: pd.DataFrame) -> pd.Series:
+        return (
+            df["show-link-href"].fillna("").astype(str)
+            + "|"
+            + df["date"].fillna("").astype(str)
+            + "|"
+            + df["performance-time"].fillna("").astype(str)
+        )
+
+    if full_mode:
+        # Drop all existing rows for genres present in new_df
+        scraped_genres = set(new_df["genre"].dropna().unique())
+        keep_mask = ~existing_df["genre"].isin(scraped_genres)
+        preserved = existing_df[keep_mask]
+        merged = pd.concat([preserved, new_df], ignore_index=True)
+    else:
+        # Upsert: new rows overwrite matching keys, non-matching preserved
+        if existing_df.empty:
+            merged = new_df.copy()
+        else:
+            new_keys = set(_perf_key(new_df))
+            existing_keys = _perf_key(existing_df)
+            keep_mask = ~existing_keys.isin(new_keys)
+            preserved = existing_df[keep_mask]
+            merged = pd.concat([preserved, new_df], ignore_index=True)
+
+    # Sort for stable output
+    sort_cols = [
+        c for c in ["genre", "show-link-href", "date", "performance-time"]
+        if c in merged.columns
+    ]
+    if sort_cols:
+        merged = merged.sort_values(sort_cols, na_position="last")
+        merged = merged.reset_index(drop=True)
+
+    return merged
+
+
+def merge_show_info(
+    existing_df: pd.DataFrame,
+    new_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge new show info into existing canonical show info.
+
+    Key: show-link-href (always additive/upsert, never removes).
+
+    Args:
+        existing_df: Existing canonical show info
+        new_df: Newly scraped show info
+
+    Returns:
+        Merged DataFrame
+    """
+    if new_df.empty:
+        return existing_df.copy()
+
+    if existing_df.empty:
+        return new_df.copy()
+
+    new_urls = set(new_df["show-link-href"].dropna().unique())
+    keep_mask = ~existing_df["show-link-href"].isin(new_urls)
+    preserved = existing_df[keep_mask]
+    merged = pd.concat([preserved, new_df], ignore_index=True)
+
+    if "show-link-href" in merged.columns:
+        merged = merged.sort_values("show-link-href", na_position="last")
+        merged = merged.reset_index(drop=True)
+
+    return merged

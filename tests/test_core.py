@@ -2,11 +2,18 @@
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from edfringe_scrape.core import (
+    PERFORMANCE_COLUMNS,
+    SHOW_INFO_COLUMNS,
     collect_venues,
+    load_canonical,
     load_venue_cache,
+    merge_performances,
+    merge_show_info,
+    save_canonical,
     save_venue_cache,
     show_info_to_dataframe,
 )
@@ -210,3 +217,182 @@ class TestVenueCache:
         assert cache_path.exists()
         loaded = load_venue_cache(cache_path)
         assert loaded == {}
+
+
+def _make_perf_df(rows: list[dict]) -> pd.DataFrame:
+    """Helper to create a performances DataFrame from row dicts."""
+    base = {col: "" for col in PERFORMANCE_COLUMNS}
+    return pd.DataFrame([{**base, **r} for r in rows])
+
+
+def _make_info_df(rows: list[dict]) -> pd.DataFrame:
+    """Helper to create a show-info DataFrame from row dicts."""
+    base = {col: "" for col in SHOW_INFO_COLUMNS}
+    return pd.DataFrame([{**base, **r} for r in rows])
+
+
+class TestMergePerformances:
+    """Test merge_performances logic."""
+
+    def test_merge_into_empty(self) -> None:
+        """New data merges cleanly into empty existing."""
+        existing = pd.DataFrame(columns=PERFORMANCE_COLUMNS)
+        new = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00", "genre": "COMEDY"},
+        ])
+        result = merge_performances(existing, new)
+        assert len(result) == 1
+        assert result.iloc[0]["show-link-href"] == "/a"
+
+    def test_new_keys_preserved(self) -> None:
+        """Non-overlapping keys from both sides are preserved."""
+        existing = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00", "genre": "COMEDY"},
+        ])
+        new = _make_perf_df([
+            {"show-link-href": "/b", "date": "Tue 2 Aug", "performance-time": "15:00", "genre": "COMEDY"},
+        ])
+        result = merge_performances(existing, new)
+        assert len(result) == 2
+
+    def test_matching_keys_overwritten(self) -> None:
+        """Matching keys are overwritten by new data."""
+        existing = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00",
+             "show-availability": "AVAILABLE", "genre": "COMEDY"},
+        ])
+        new = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00",
+             "show-availability": "SOLD_OUT", "genre": "COMEDY"},
+        ])
+        result = merge_performances(existing, new)
+        assert len(result) == 1
+        assert result.iloc[0]["show-availability"] == "SOLD_OUT"
+
+    def test_full_mode_replaces_genre(self) -> None:
+        """Full mode drops all existing rows for the scraped genre."""
+        existing = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00", "genre": "COMEDY"},
+            {"show-link-href": "/b", "date": "Mon 1 Aug", "performance-time": "15:00", "genre": "COMEDY"},
+        ])
+        new = _make_perf_df([
+            {"show-link-href": "/c", "date": "Wed 3 Aug", "performance-time": "16:00", "genre": "COMEDY"},
+        ])
+        result = merge_performances(existing, new, full_mode=True)
+        assert len(result) == 1
+        assert result.iloc[0]["show-link-href"] == "/c"
+
+    def test_full_mode_preserves_other_genres(self) -> None:
+        """Full mode only replaces the scraped genre, not others."""
+        existing = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00", "genre": "COMEDY"},
+            {"show-link-href": "/b", "date": "Mon 1 Aug", "performance-time": "15:00", "genre": "THEATRE"},
+        ])
+        new = _make_perf_df([
+            {"show-link-href": "/c", "date": "Wed 3 Aug", "performance-time": "16:00", "genre": "COMEDY"},
+        ])
+        result = merge_performances(existing, new, full_mode=True)
+        assert len(result) == 2
+        genres = set(result["genre"])
+        assert "THEATRE" in genres
+        assert "COMEDY" in genres
+
+    def test_empty_new_data(self) -> None:
+        """Empty new data returns existing unchanged."""
+        existing = _make_perf_df([
+            {"show-link-href": "/a", "date": "Mon 1 Aug", "performance-time": "14:00", "genre": "COMEDY"},
+        ])
+        new = pd.DataFrame(columns=PERFORMANCE_COLUMNS)
+        result = merge_performances(existing, new)
+        assert len(result) == 1
+
+
+class TestMergeShowInfo:
+    """Test merge_show_info logic."""
+
+    def test_merge_into_empty(self) -> None:
+        """New data merges cleanly into empty existing."""
+        existing = pd.DataFrame(columns=SHOW_INFO_COLUMNS)
+        new = _make_info_df([
+            {"show-link-href": "/a", "show-name": "Show A"},
+        ])
+        result = merge_show_info(existing, new)
+        assert len(result) == 1
+
+    def test_overwrites_by_url(self) -> None:
+        """Matching URLs are overwritten by new data."""
+        existing = _make_info_df([
+            {"show-link-href": "/a", "show-name": "Old Name", "description": "old"},
+        ])
+        new = _make_info_df([
+            {"show-link-href": "/a", "show-name": "New Name", "description": "new"},
+        ])
+        result = merge_show_info(existing, new)
+        assert len(result) == 1
+        assert result.iloc[0]["show-name"] == "New Name"
+        assert result.iloc[0]["description"] == "new"
+
+    def test_preserves_non_matching(self) -> None:
+        """Non-matching shows are preserved."""
+        existing = _make_info_df([
+            {"show-link-href": "/a", "show-name": "Show A"},
+            {"show-link-href": "/b", "show-name": "Show B"},
+        ])
+        new = _make_info_df([
+            {"show-link-href": "/a", "show-name": "Show A Updated"},
+        ])
+        result = merge_show_info(existing, new)
+        assert len(result) == 2
+        urls = set(result["show-link-href"])
+        assert "/a" in urls
+        assert "/b" in urls
+
+    def test_empty_new_data(self) -> None:
+        """Empty new data returns existing unchanged."""
+        existing = _make_info_df([
+            {"show-link-href": "/a", "show-name": "Show A"},
+        ])
+        new = pd.DataFrame(columns=SHOW_INFO_COLUMNS)
+        result = merge_show_info(existing, new)
+        assert len(result) == 1
+
+
+class TestLoadCanonical:
+    """Test load_canonical function."""
+
+    def test_load_existing_file(self, tmp_path: Path) -> None:
+        """Test loading an existing CSV file."""
+        csv_path = tmp_path / "test.csv"
+        df = pd.DataFrame({"show-link-href": ["/a"], "genre": ["COMEDY"]})
+        df.to_csv(csv_path, index=False)
+
+        result = load_canonical(csv_path, ["show-link-href", "genre", "extra"])
+        assert len(result) == 1
+        assert "extra" in result.columns
+
+    def test_load_missing_file(self, tmp_path: Path) -> None:
+        """Test loading from non-existent file returns empty with schema."""
+        csv_path = tmp_path / "missing.csv"
+        result = load_canonical(csv_path, ["col_a", "col_b"])
+        assert result.empty
+        assert list(result.columns) == ["col_a", "col_b"]
+
+
+class TestSaveCanonical:
+    """Test save_canonical function."""
+
+    def test_creates_file(self, tmp_path: Path) -> None:
+        """Test saving creates the CSV file."""
+        csv_path = tmp_path / "output.csv"
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        save_canonical(df, csv_path)
+        assert csv_path.exists()
+        loaded = pd.read_csv(csv_path)
+        assert len(loaded) == 2
+
+    def test_creates_parent_dirs(self, tmp_path: Path) -> None:
+        """Test saving creates parent directories."""
+        csv_path = tmp_path / "nested" / "dir" / "output.csv"
+        df = pd.DataFrame({"a": [1]})
+        save_canonical(df, csv_path)
+        assert csv_path.exists()
