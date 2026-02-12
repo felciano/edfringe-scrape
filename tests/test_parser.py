@@ -261,3 +261,49 @@ class TestNextDataParser:
         result = NextDataParser.parse_performances(event_data)
         assert len(result) == 1
         assert result[0].availability == "SOLD_OUT"
+
+    def test_parse_performances_deduplicates(self) -> None:
+        """Test that duplicate performances are deduplicated."""
+        event_data = {
+            "venues": [{"title": "Venue A"}],
+            "performances": [
+                {
+                    "dateTime": "2025-08-01T19:30:00Z",
+                    "estimatedEndDateTime": "2025-08-01T20:30:00Z",
+                    "ticketStatus": "TICKETS_AVAILABLE",
+                },
+                {
+                    "dateTime": "2025-08-01T19:30:00Z",
+                    "estimatedEndDateTime": "2025-08-01T20:30:00Z",
+                    "ticketStatus": "PREVIEW_SHOW",
+                },
+            ],
+        }
+
+        performances = NextDataParser.parse_performances(event_data)
+
+        # Should only have 1 performance, with the more informative status
+        assert len(performances) == 1
+        assert performances[0].availability == "PREVIEW_SHOW"
+
+    def test_parse_performances_keeps_higher_priority_status(self) -> None:
+        """Test that higher priority status is kept when deduplicating."""
+        event_data = {
+            "venues": [{"title": "Venue A"}],
+            "performances": [
+                {
+                    "dateTime": "2025-08-01T19:30:00Z",
+                    "ticketStatus": "PREVIEW_SHOW",
+                },
+                {
+                    "dateTime": "2025-08-01T19:30:00Z",
+                    "ticketStatus": "SOLD_OUT",
+                },
+            ],
+        }
+
+        performances = NextDataParser.parse_performances(event_data)
+
+        # SOLD_OUT has higher priority than PREVIEW_SHOW
+        assert len(performances) == 1
+        assert performances[0].availability == "SOLD_OUT"

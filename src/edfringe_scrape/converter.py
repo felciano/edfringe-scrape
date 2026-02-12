@@ -555,6 +555,10 @@ class FringeConverter:
         # Combine performers as comma-delimited list
         performer = ", ".join(performers)
 
+        # If no performer identified but we have a producer, it's likely a variety show
+        if not performer and producer:
+            performer = "Various"
+
         return performer, producer, show_name
 
 

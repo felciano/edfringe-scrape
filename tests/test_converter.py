@@ -317,11 +317,11 @@ class TestFestivalPlannerExport:
         assert producer == "Impatient Productions"
         assert show == "Before It Overtakes Us"
 
-        # Production company without performer in title
+        # Production company without performer in title -> "Various"
         performer, producer, show = converter._parse_performer_producer_show(
             "AEG Presents", "The Big Comedy Show"
         )
-        assert performer == ""
+        assert performer == "Various"
         assert producer == "AEG Presents"
         assert show == "The Big Comedy Show"
 
@@ -387,3 +387,36 @@ class TestFestivalPlannerExport:
         assert performer == "Mark Watson"
         assert producer == ""
         assert show == "Before It Overtakes Us"
+
+    def test_variety_show_gets_various_performer(
+        self, converter: FringeConverter
+    ) -> None:
+        """Test that shows with only a producer get 'Various' as performer."""
+        # Production company with no performer in title
+        performer, producer, show = converter._parse_performer_producer_show(
+            "Absolute Comedy", "Best of the Fest"
+        )
+        assert performer == "Various"
+        assert producer == "Absolute Comedy"
+        assert show == "Best of the Fest"
+
+    def test_variety_show_in_export(self, converter: FringeConverter) -> None:
+        """Test that variety shows get 'Various' in exported data."""
+        df = pd.DataFrame(
+            {
+                "show-name": ["5 Headliners for £10"],
+                "show-performer": ["RGB Monster"],
+                "show-location": ["Comedy Club"],
+                "date": ["Thursday 06 August"],
+                "performance-time": ["19:30 - 21:00"],
+                "show-availability": ["TICKETS_AVAILABLE"],
+            }
+        )
+
+        result = converter.to_festival_planner_format(df, smart_parsing=True)
+
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["performer"] == "Various"
+        assert row["producer"] == "RGB Monster"
+        assert row["show_name"] == "5 Headliners for £10"

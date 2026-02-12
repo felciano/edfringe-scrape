@@ -75,9 +75,27 @@ class NextDataParser:
             logger.debug(f"Failed to extract event data: {e}")
             return None
 
+    # Status priority for deduplication (higher priority = more informative)
+    STATUS_PRIORITY = {
+        "CANCELLED": 100,
+        "SOLD_OUT": 90,
+        "NO_ALLOCATION": 85,
+        "NO_ALLOCATION_REMAINING": 85,
+        "PREVIEW_SHOW": 70,
+        "PREVIEW": 70,
+        "TWO_FOR_ONE": 60,
+        "FREE_TICKETED": 50,
+        "FREE": 50,
+        "TICKETS_AVAILABLE": 10,
+        "": 0,
+    }
+
     @staticmethod
     def parse_performances(event_data: dict[str, Any]) -> list[PerformanceDetail]:
         """Parse performances from event data.
+
+        Deduplicates performances by date/time/venue, keeping the most
+        informative availability status when duplicates exist.
 
         Args:
             event_data: Event data dict from __NEXT_DATA__
@@ -85,7 +103,8 @@ class NextDataParser:
         Returns:
             List of PerformanceDetail objects
         """
-        performances: list[PerformanceDetail] = []
+        # Use dict to deduplicate by (date, start_time, venue)
+        perf_map: dict[tuple, PerformanceDetail] = {}
 
         venue_name = None
         venue_location = None
@@ -137,8 +156,35 @@ class NextDataParser:
                 elif perf.get("soldOut"):
                     availability = "SOLD_OUT"
 
-                performances.append(
-                    PerformanceDetail(
+                # Create deduplication key
+                key = (perf_date, start_time, venue_name)
+
+                # Check if we already have this performance
+                if key in perf_map:
+                    # Keep the one with higher priority status
+                    existing = perf_map[key]
+                    existing_priority = NextDataParser.STATUS_PRIORITY.get(
+                        existing.availability or "", 0
+                    )
+                    new_priority = NextDataParser.STATUS_PRIORITY.get(
+                        availability or "", 0
+                    )
+
+                    if new_priority > existing_priority:
+                        logger.debug(
+                            f"Dedup: replacing {existing.availability} with "
+                            f"{availability} for {perf_date} {start_time}"
+                        )
+                        perf_map[key] = PerformanceDetail(
+                            date=perf_date,
+                            start_time=start_time,
+                            end_time=end_time,
+                            availability=availability,
+                            venue=venue_name,
+                            location=venue_location,
+                        )
+                else:
+                    perf_map[key] = PerformanceDetail(
                         date=perf_date,
                         start_time=start_time,
                         end_time=end_time,
@@ -146,12 +192,12 @@ class NextDataParser:
                         venue=venue_name,
                         location=venue_location,
                     )
-                )
 
             except (ValueError, TypeError) as e:
                 logger.debug(f"Failed to parse performance: {e}")
                 continue
 
+        performances = list(perf_map.values())
         logger.debug(f"Parsed {len(performances)} performances from event data")
         return performances
 
