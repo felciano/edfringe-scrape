@@ -17,7 +17,7 @@ class TestSettings:
         assert settings.output_dir == "data/raw"
         assert settings.scrapingdog_api_key is None
         assert settings.request_delay_ms == 2000
-        assert settings.js_wait_ms == 5000
+        assert settings.js_wait_ms == 15000
         assert settings.default_year == 2026
 
     def test_env_var_loading(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@ from datetime import date, time
 
 import pytest
 
-from edfringe_scrape.parser import FringeParser, NextDataParser
+from edfringe_scrape.parser import FringeParser, NextDataParser, ShowDetailResult
 
 
 class TestFringeParser:
@@ -307,3 +307,326 @@ class TestNextDataParser:
         # SOLD_OUT has higher priority than PREVIEW_SHOW
         assert len(performances) == 1
         assert performances[0].availability == "SOLD_OUT"
+
+    def test_parse_show_info_full_attributes(self) -> None:
+        """Test parsing show info with full attributes."""
+        event_data = {
+            "genre": "COMEDY",
+            "subGenre": "Stand-up,LGBTQ+",
+            "description": "A hilarious stand-up show",
+            "attributes": [
+                {"key": "explicit_material", "value": "Strong language, adult themes"},
+                {"key": "age_range_guidance", "value": "16+"},
+                {"key": "instagram", "value": "https://instagram.com/comedian"},
+                {"key": "website", "value": "https://comedian.com"},
+                {"key": "twitter", "value": "https://twitter.com/comedian"},
+            ],
+            "images": [
+                {"url": "https://img.com/small.jpg", "imageType": "Small"},
+                {"url": "https://img.com/large.jpg", "imageType": "Large"},
+            ],
+        }
+
+        info = NextDataParser.parse_show_info(
+            event_data,
+            show_url="https://www.edfringe.com/shows/123",
+            show_name="Test Show",
+        )
+        assert info.show_url == "https://www.edfringe.com/shows/123"
+        assert info.show_name == "Test Show"
+        assert info.genre == "COMEDY"
+        assert info.subgenres == "Stand-up, LGBTQ+"
+        assert info.description == "A hilarious stand-up show"
+        assert info.warnings == "Strong language, adult themes"
+        assert info.age_suitability == "16+"
+        assert info.instagram == "https://instagram.com/comedian"
+        assert info.website == "https://comedian.com"
+        assert info.twitter == "https://twitter.com/comedian"
+        assert info.image_url == "https://img.com/large.jpg"
+
+    def test_parse_show_info_empty_attributes(self) -> None:
+        """Test parsing show info with no attributes."""
+        event_data = {
+            "description": "Simple show",
+            "attributes": [],
+            "images": [],
+        }
+
+        info = NextDataParser.parse_show_info(event_data)
+        assert info.description == "Simple show"
+        assert info.genre == ""
+        assert info.subgenres == ""
+        assert info.warnings == ""
+        assert info.age_suitability == ""
+        assert info.image_url == ""
+        assert info.instagram == ""
+
+    def test_parse_show_info_genre_only(self) -> None:
+        """Test parsing show info with primary genre but no sub-genres."""
+        event_data = {"genre": "THEATRE", "subGenre": ""}
+        info = NextDataParser.parse_show_info(event_data)
+        assert info.genre == "THEATRE"
+        assert info.subgenres == ""
+
+    def test_parse_show_info_genre_with_sub_genres(self) -> None:
+        """Test parsing show info with primary and sub-genres."""
+        event_data = {"genre": "COMEDY", "subGenre": "Stand-up,LGBTQ+"}
+        info = NextDataParser.parse_show_info(event_data)
+        assert info.genre == "COMEDY"
+        assert info.subgenres == "Stand-up, LGBTQ+"
+
+    def test_parse_show_info_social_links_fallback(self) -> None:
+        """Test that socialLinks array is used as fallback."""
+        event_data = {
+            "description": "",
+            "attributes": [
+                {"key": "instagram", "value": "https://instagram.com/from_attrs"},
+            ],
+            "socialLinks": [
+                {"type": "Instagram", "url": "https://instagram.com/from_links"},
+                {"type": "Facebook", "url": "https://facebook.com/show"},
+                {"type": "TikTok", "url": "https://tiktok.com/@show"},
+            ],
+        }
+
+        info = NextDataParser.parse_show_info(event_data)
+        # Instagram should come from attributes (not overridden)
+        assert info.instagram == "https://instagram.com/from_attrs"
+        # Facebook should come from socialLinks fallback
+        assert info.facebook == "https://facebook.com/show"
+        # TikTok should come from socialLinks fallback
+        assert info.tiktok == "https://tiktok.com/@show"
+
+    def test_parse_show_info_image_fallback_to_first(self) -> None:
+        """Test image URL falls back to first image when no Large type."""
+        event_data = {
+            "description": "",
+            "images": [
+                {"url": "https://img.com/small.jpg", "imageType": "Small"},
+                {"url": "https://img.com/medium.jpg", "imageType": "Medium"},
+            ],
+        }
+
+        info = NextDataParser.parse_show_info(event_data)
+        assert info.image_url == "https://img.com/small.jpg"
+
+    def test_parse_show_info_missing_fields(self) -> None:
+        """Test parsing show info when event data has no relevant keys."""
+        event_data = {"performances": []}
+
+        info = NextDataParser.parse_show_info(event_data)
+        assert info.description == ""
+        assert info.warnings == ""
+        assert info.image_url == ""
+
+
+class TestNextDataParserVenue:
+    """Test NextDataParser venue parsing methods."""
+
+    def test_parse_venue_info_full(self) -> None:
+        """Test parsing venue info with all fields."""
+        event_data = {
+            "venues": [
+                {
+                    "title": "Pleasance Courtyard",
+                    "venueCode": "V123",
+                    "address1": "60 Pleasance",
+                    "address2": "Edinburgh",
+                    "postCode": "EH8 9TJ",
+                    "geoLocation": "55.9469,-3.1813",
+                    "slug": "pleasance-courtyard",
+                    "description": "A popular Fringe venue",
+                }
+            ],
+        }
+        venue = NextDataParser.parse_venue_info(event_data)
+        assert venue is not None
+        assert venue.venue_code == "V123"
+        assert venue.venue_name == "Pleasance Courtyard"
+        assert venue.address == "60 Pleasance, Edinburgh"
+        assert venue.postcode == "EH8 9TJ"
+        assert venue.geolocation == "55.9469,-3.1813"
+        assert "55.9469,-3.1813" in venue.google_maps_url
+        assert venue.venue_page_url == "https://www.edfringe.com/venues/pleasance-courtyard"
+        assert venue.description == "A popular Fringe venue"
+        assert venue.contact_phone == ""
+        assert venue.contact_email == ""
+
+    def test_parse_venue_info_empty_venues(self) -> None:
+        """Test that empty venues list returns None."""
+        event_data = {"venues": []}
+        assert NextDataParser.parse_venue_info(event_data) is None
+
+    def test_parse_venue_info_no_venues_key(self) -> None:
+        """Test that missing venues key returns None."""
+        event_data = {"performances": []}
+        assert NextDataParser.parse_venue_info(event_data) is None
+
+    def test_parse_venue_info_minimal(self) -> None:
+        """Test parsing venue with minimal data."""
+        event_data = {
+            "venues": [{"title": "Small Venue"}],
+        }
+        venue = NextDataParser.parse_venue_info(event_data)
+        assert venue is not None
+        assert venue.venue_name == "Small Venue"
+        assert venue.venue_code == ""
+        assert venue.google_maps_url == ""
+        assert venue.venue_page_url == ""
+
+    def test_parse_venue_info_custom_base_url(self) -> None:
+        """Test venue page URL uses custom base URL."""
+        event_data = {
+            "venues": [{"slug": "my-venue"}],
+        }
+        venue = NextDataParser.parse_venue_info(
+            event_data, base_url="https://custom.example.com"
+        )
+        assert venue is not None
+        assert venue.venue_page_url == "https://custom.example.com/venues/my-venue"
+
+    def test_extract_venue_page_data(self) -> None:
+        """Test extracting venue data from venue page HTML."""
+        venue_data = {
+            "title": "Pleasance Courtyard",
+            "contactPhone": "+44 131 556 6550",
+            "contactEmail": "info@pleasance.co.uk",
+        }
+        data = {
+            "props": {
+                "pageProps": {
+                    "initialState": {
+                        "apiPublic": {
+                            "queries": {
+                                'Venue({"venueSlug":"pleasance"})': {
+                                    "data": {"venue": venue_data}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+        result = NextDataParser.extract_venue_page_data(html)
+        assert result is not None
+        assert result["title"] == "Pleasance Courtyard"
+        assert result["contactPhone"] == "+44 131 556 6550"
+
+    def test_extract_venue_page_data_not_found(self) -> None:
+        """Test extract_venue_page_data with no venue data."""
+        html = "<html><body>No next data</body></html>"
+        assert NextDataParser.extract_venue_page_data(html) is None
+
+    def test_extract_venue_page_data_no_venue_key(self) -> None:
+        """Test extract_venue_page_data when queries have no Venue key."""
+        data = {
+            "props": {
+                "pageProps": {
+                    "initialState": {
+                        "apiPublic": {
+                            "queries": {
+                                'Event({"eventId":"test"})': {
+                                    "data": {"event": {}}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+        assert NextDataParser.extract_venue_page_data(html) is None
+
+    def test_parse_venue_contact(self) -> None:
+        """Test parsing contact details from venue page data."""
+        venue_data = {
+            "contactPhone": "+44 131 556 6550",
+            "contactEmail": "info@pleasance.co.uk",
+        }
+        phone, email = NextDataParser.parse_venue_contact(venue_data)
+        assert phone == "+44 131 556 6550"
+        assert email == "info@pleasance.co.uk"
+
+    def test_parse_venue_contact_missing(self) -> None:
+        """Test parsing contact when fields are missing."""
+        phone, email = NextDataParser.parse_venue_contact({})
+        assert phone == ""
+        assert email == ""
+
+    def test_parse_venue_contact_none_values(self) -> None:
+        """Test parsing contact when fields are None."""
+        venue_data = {"contactPhone": None, "contactEmail": None}
+        phone, email = NextDataParser.parse_venue_contact(venue_data)
+        assert phone == ""
+        assert email == ""
+
+
+class TestFringeParserShowDetail:
+    """Test FringeParser.parse_show_detail returns ShowDetailResult."""
+
+    @pytest.fixture
+    def parser(self) -> FringeParser:
+        return FringeParser(default_year=2025)
+
+    def test_parse_show_detail_returns_named_tuple(
+        self, parser: FringeParser
+    ) -> None:
+        """Test that parse_show_detail returns ShowDetailResult with venue_info."""
+        event = {
+            "title": "Comedy Show",
+            "description": "Great show",
+            "venues": [
+                {
+                    "title": "Venue A",
+                    "venueCode": "VA1",
+                    "slug": "venue-a",
+                    "geoLocation": "55.94,-3.18",
+                }
+            ],
+            "spaces": [],
+            "performances": [
+                {
+                    "dateTime": "2025-08-01T19:30:00Z",
+                    "ticketStatus": "TICKETS_AVAILABLE",
+                }
+            ],
+            "attributes": [],
+            "images": [],
+        }
+        data = {
+            "props": {
+                "pageProps": {
+                    "initialState": {
+                        "apiPublic": {
+                            "queries": {
+                                'Event({"eventId":"test"})': {
+                                    "data": {"event": event}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+
+        result = parser.parse_show_detail(
+            html, show_url="https://edfringe.com/show/1", show_name="Comedy Show"
+        )
+        assert isinstance(result, ShowDetailResult)
+        assert len(result.performances) == 1
+        assert result.show_info is not None
+        assert result.show_info.description == "Great show"
+        assert result.venue_info is not None
+        assert result.venue_info.venue_code == "VA1"
+        assert result.venue_info.venue_page_url == "https://www.edfringe.com/venues/venue-a"
+
+    def test_parse_show_detail_html_fallback(self, parser: FringeParser) -> None:
+        """Test fallback returns None show_info and venue_info."""
+        html = "<html><body>No next data</body></html>"
+        result = parser.parse_show_detail(html)
+        assert isinstance(result, ShowDetailResult)
+        assert result.performances == []
+        assert result.show_info is None
+        assert result.venue_info is None

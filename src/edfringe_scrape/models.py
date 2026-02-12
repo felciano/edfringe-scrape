@@ -89,6 +89,42 @@ class PerformanceDetail(BaseModel):
     location: str | None = Field(None, description="Venue location")
 
 
+class ShowInfo(BaseModel):
+    """Show metadata extracted from detail page."""
+
+    show_url: str = Field(default="", description="Show page URL")
+    show_name: str = Field(default="", description="Show name")
+    genre: str = Field(default="", description="Primary genre (e.g. COMEDY)")
+    subgenres: str = Field(default="", description="Comma-separated sub-genres")
+    description: str = Field(default="", description="Show description")
+    warnings: str = Field(default="", description="Content warnings")
+    age_suitability: str = Field(default="", description="Age suitability guidance")
+    image_url: str = Field(default="", description="Show image URL")
+    website: str = Field(default="", description="Website link")
+    facebook: str = Field(default="", description="Facebook link")
+    instagram: str = Field(default="", description="Instagram link")
+    tiktok: str = Field(default="", description="TikTok link")
+    youtube: str = Field(default="", description="YouTube link")
+    twitter: str = Field(default="", description="Twitter link")
+    bluesky: str = Field(default="", description="Bluesky link")
+    mastodon: str = Field(default="", description="Mastodon link")
+
+
+class VenueInfo(BaseModel):
+    """Venue information extracted from show and venue pages."""
+
+    venue_code: str = Field(default="", description="Venue code (e.g. 'V123')")
+    venue_name: str = Field(default="", description="Venue name")
+    address: str = Field(default="", description="Full address")
+    postcode: str = Field(default="", description="Postcode")
+    geolocation: str = Field(default="", description="Lat,lng coordinates")
+    google_maps_url: str = Field(default="", description="Google Maps directions URL")
+    venue_page_url: str = Field(default="", description="Venue detail page URL")
+    description: str = Field(default="", description="Venue description")
+    contact_phone: str = Field(default="", description="Contact phone from venue page")
+    contact_email: str = Field(default="", description="Contact email from venue page")
+
+
 class ScrapedShow(BaseModel):
     """Complete scraped show with all performances."""
 
@@ -100,6 +136,8 @@ class ScrapedShow(BaseModel):
         default_factory=list, description="List of performances"
     )
     genre: Genre | None = Field(None, description="Show genre")
+    show_info: ShowInfo | None = Field(None, description="Show metadata")
+    venue_info: VenueInfo | None = Field(None, description="Venue information")
 
 
 class ScrapingDogResponse(BaseModel):

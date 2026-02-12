@@ -18,7 +18,7 @@ BASE_URL = "https://www.edfringe.com"
 REQUEST_DELAY_MS = 2000
 
 # JavaScript rendering wait time in milliseconds (max 35000)
-JS_WAIT_MS = 5000
+JS_WAIT_MS = 15000
 
 # Default year for date parsing (e.g., "Wednesday 30 July" -> 2026-07-30)
 DEFAULT_YEAR = 2026

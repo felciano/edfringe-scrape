@@ -13,6 +13,8 @@ from edfringe_scrape.models import (
     ScrapedShow,
     Show,
     ShowCard,
+    ShowInfo,
+    VenueInfo,
 )
 
 
@@ -140,6 +142,88 @@ class TestPerformanceDetail:
         assert detail.start_time == time(19, 30)
 
 
+class TestShowInfo:
+    """Test ShowInfo model."""
+
+    def test_full_show_info(self) -> None:
+        """Test creating ShowInfo with all fields populated."""
+        info = ShowInfo(
+            show_url="https://www.edfringe.com/shows/123",
+            show_name="Comedy Night",
+            genre="COMEDY",
+            subgenres="Stand-up",
+            description="A hilarious show",
+            warnings="Strong language",
+            age_suitability="16+",
+            image_url="https://example.com/img.jpg",
+            website="https://example.com",
+            facebook="https://facebook.com/show",
+            instagram="https://instagram.com/show",
+            tiktok="https://tiktok.com/@show",
+            youtube="https://youtube.com/show",
+            twitter="https://twitter.com/show",
+            bluesky="https://bsky.app/show",
+            mastodon="https://mastodon.social/@show",
+        )
+        assert info.show_name == "Comedy Night"
+        assert info.genre == "COMEDY"
+        assert info.subgenres == "Stand-up"
+        assert info.description == "A hilarious show"
+        assert info.warnings == "Strong language"
+        assert info.age_suitability == "16+"
+        assert info.instagram == "https://instagram.com/show"
+
+    def test_minimal_show_info(self) -> None:
+        """Test creating ShowInfo with defaults."""
+        info = ShowInfo()
+        assert info.show_url == ""
+        assert info.show_name == ""
+        assert info.genre == ""
+        assert info.subgenres == ""
+        assert info.description == ""
+        assert info.warnings == ""
+        assert info.instagram == ""
+        assert info.bluesky == ""
+
+
+class TestVenueInfo:
+    """Test VenueInfo model."""
+
+    def test_full_venue_info(self) -> None:
+        """Test creating VenueInfo with all fields populated."""
+        venue = VenueInfo(
+            venue_code="V123",
+            venue_name="Pleasance Courtyard",
+            address="60 Pleasance, Edinburgh",
+            postcode="EH8 9TJ",
+            geolocation="55.9469,-3.1813",
+            google_maps_url="https://www.google.com/maps/dir/?api=1&destination=55.9469,-3.1813",
+            venue_page_url="https://www.edfringe.com/venues/pleasance-courtyard",
+            description="A popular Fringe venue",
+            contact_phone="+44 131 556 6550",
+            contact_email="info@pleasance.co.uk",
+        )
+        assert venue.venue_code == "V123"
+        assert venue.venue_name == "Pleasance Courtyard"
+        assert venue.postcode == "EH8 9TJ"
+        assert venue.contact_phone == "+44 131 556 6550"
+        assert venue.contact_email == "info@pleasance.co.uk"
+
+    def test_minimal_venue_info(self) -> None:
+        """Test creating VenueInfo with defaults."""
+        venue = VenueInfo()
+        assert venue.venue_code == ""
+        assert venue.venue_name == ""
+        assert venue.address == ""
+        assert venue.postcode == ""
+        assert venue.geolocation == ""
+        assert venue.google_maps_url == ""
+        assert venue.venue_page_url == ""
+        assert venue.description == ""
+        assert venue.contact_phone == ""
+        assert venue.contact_email == ""
+
+
 class TestScrapedShow:
     """Test ScrapedShow model."""
 
@@ -160,3 +244,41 @@ class TestScrapedShow:
         assert show.title == "Comedy Night"
         assert show.genre == Genre.COMEDY
         assert len(show.performances) == 1
+
+    def test_scraped_show_with_show_info(self) -> None:
+        """Test creating scraped show with show info."""
+        info = ShowInfo(
+            show_url="https://www.edfringe.com/shows/123",
+            show_name="Comedy Night",
+            description="A great show",
+        )
+        show = ScrapedShow(
+            title="Comedy Night",
+            url="https://www.edfringe.com/shows/123",
+            show_info=info,
+        )
+        assert show.show_info is not None
+        assert show.show_info.description == "A great show"
+
+    def test_scraped_show_with_venue_info(self) -> None:
+        """Test creating scraped show with venue info."""
+        venue = VenueInfo(
+            venue_code="V123",
+            venue_name="Pleasance Courtyard",
+        )
+        show = ScrapedShow(
+            title="Comedy Night",
+            url="https://www.edfringe.com/shows/123",
+            venue_info=venue,
+        )
+        assert show.venue_info is not None
+        assert show.venue_info.venue_code == "V123"
+
+    def test_scraped_show_without_show_info(self) -> None:
+        """Test creating scraped show without show info."""
+        show = ScrapedShow(
+            title="Comedy Night",
+            url="https://www.edfringe.com/shows/123",
+        )
+        assert show.show_info is None
+        assert show.venue_info is None

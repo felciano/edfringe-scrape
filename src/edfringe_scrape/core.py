@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from .config import Settings
-from .models import Genre, PerformanceDetail, ScrapedShow, ShowCard
+from .models import Genre, PerformanceDetail, ScrapedShow, ShowCard, ShowInfo, VenueInfo
 from .parser import FringeParser
 from .scraper import APIDiscovery, ScrapingDogClient, ScrapingDogError
 
@@ -148,15 +148,22 @@ class FringeScraper:
             genre: Genre of the show
 
         Returns:
-            ScrapedShow with performances
+            ScrapedShow with performances and show info
         """
         logger.debug(f"Fetching details for: {card.title}")
 
         performances: list[PerformanceDetail] = []
+        show_info: ShowInfo | None = None
+        venue_info: VenueInfo | None = None
 
         try:
             response = self.client.fetch_page(card.url, dynamic=True)
-            performances = self.parser.parse_show_detail(response.html)
+            result = self.parser.parse_show_detail(
+                response.html, show_url=card.url, show_name=card.title
+            )
+            performances = result.performances
+            show_info = result.show_info
+            venue_info = result.venue_info
             logger.debug(f"Found {len(performances)} performances for {card.title}")
         except ScrapingDogError as e:
             logger.warning(f"Failed to fetch details for {card.title}: {e}")
@@ -168,7 +175,59 @@ class FringeScraper:
             duration=card.duration,
             performances=performances,
             genre=genre,
+            show_info=show_info,
+            venue_info=venue_info,
         )
+
+    def fetch_venue_contacts(
+        self,
+        venues: dict[str, VenueInfo],
+        known_codes: set[str],
+    ) -> dict[str, VenueInfo]:
+        """Fetch contact details for new venues from venue pages.
+
+        Args:
+            venues: Dict of all venues from current scrape
+            known_codes: Set of venue codes already in cache
+
+        Returns:
+            Updated venues dict with contact info filled in
+        """
+        from .parser import NextDataParser
+
+        for code, venue in venues.items():
+            if code in known_codes:
+                continue
+            if not venue.venue_page_url:
+                continue
+
+            try:
+                response = self.client.fetch_page(
+                    venue.venue_page_url, dynamic=True
+                )
+                venue_page_data = NextDataParser.extract_venue_page_data(
+                    response.html
+                )
+                if venue_page_data:
+                    phone, email = NextDataParser.parse_venue_contact(
+                        venue_page_data
+                    )
+                    venues[code] = venue.model_copy(
+                        update={
+                            "contact_phone": phone,
+                            "contact_email": email,
+                        }
+                    )
+                    logger.debug(
+                        f"Fetched contacts for {venue.venue_name}: "
+                        f"phone={phone}, email={email}"
+                    )
+            except ScrapingDogError as e:
+                logger.warning(
+                    f"Failed to fetch venue page for {venue.venue_name}: {e}"
+                )
+
+        return venues
 
     def fetch_all_search_results(
         self,
@@ -350,3 +409,142 @@ def save_raw_csv(
     logger.info(f"Saved {len(df)} rows to {output_path}")
 
     return output_path
+
+
+def show_info_to_dataframe(shows: list[ScrapedShow]) -> pd.DataFrame:
+    """Convert scraped shows to a show-info DataFrame (one row per show).
+
+    Args:
+        shows: List of ScrapedShow objects
+
+    Returns:
+        DataFrame with show info columns
+    """
+    rows = []
+    for show in shows:
+        if not show.show_info:
+            continue
+        info = show.show_info
+        rows.append(
+            {
+                "show-link-href": info.show_url,
+                "show-name": info.show_name,
+                "genre": info.genre,
+                "subgenres": info.subgenres,
+                "description": info.description,
+                "warnings": info.warnings,
+                "age_suitability": info.age_suitability,
+                "image_url": info.image_url,
+                "website": info.website,
+                "facebook": info.facebook,
+                "instagram": info.instagram,
+                "tiktok": info.tiktok,
+                "youtube": info.youtube,
+                "twitter": info.twitter,
+                "bluesky": info.bluesky,
+                "mastodon": info.mastodon,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def save_show_info_csv(
+    df: pd.DataFrame,
+    output_dir: Path,
+    genre: str,
+) -> Path:
+    """Save show info data to CSV.
+
+    Args:
+        df: DataFrame with show info
+        output_dir: Output directory
+        genre: Genre name for filename
+
+    Returns:
+        Path to saved file
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    filename = f"{timestamp}-EdFringe-{genre}-show-info.csv"
+    output_path = output_dir / filename
+
+    df.to_csv(output_path, index=False)
+    logger.info(f"Saved {len(df)} show info rows to {output_path}")
+
+    return output_path
+
+
+def collect_venues(shows: list[ScrapedShow]) -> dict[str, VenueInfo]:
+    """Collect unique venues from scraped shows, deduped by venue_code.
+
+    Args:
+        shows: List of scraped shows
+
+    Returns:
+        Dict mapping venue_code to VenueInfo
+    """
+    venues: dict[str, VenueInfo] = {}
+    for show in shows:
+        if show.venue_info and show.venue_info.venue_code:
+            code = show.venue_info.venue_code
+            if code not in venues:
+                venues[code] = show.venue_info
+    return venues
+
+
+def load_venue_cache(cache_path: Path) -> dict[str, VenueInfo]:
+    """Load venue cache from CSV file.
+
+    Args:
+        cache_path: Path to venue-info.csv
+
+    Returns:
+        Dict mapping venue_code to VenueInfo (empty if file doesn't exist)
+    """
+    if not cache_path.exists():
+        return {}
+
+    df = pd.read_csv(cache_path).fillna("")
+    venues: dict[str, VenueInfo] = {}
+    for _, row in df.iterrows():
+        venue = VenueInfo(
+            venue_code=str(row.get("venue_code", "")),
+            venue_name=str(row.get("venue_name", "")),
+            address=str(row.get("address", "")),
+            postcode=str(row.get("postcode", "")),
+            geolocation=str(row.get("geolocation", "")),
+            google_maps_url=str(row.get("google_maps_url", "")),
+            venue_page_url=str(row.get("venue_page_url", "")),
+            description=str(row.get("description", "")),
+            contact_phone=str(row.get("contact_phone", "")),
+            contact_email=str(row.get("contact_email", "")),
+        )
+        if venue.venue_code:
+            venues[venue.venue_code] = venue
+    return venues
+
+
+def save_venue_cache(
+    venues: dict[str, VenueInfo], cache_path: Path
+) -> Path:
+    """Save venues to CSV cache file.
+
+    Args:
+        venues: Dict mapping venue_code to VenueInfo
+        cache_path: Path to write venue-info.csv
+
+    Returns:
+        Path to saved file
+    """
+    rows = [v.model_dump() for v in venues.values()]
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(
+            columns=[
+                "venue_code", "venue_name", "address", "postcode",
+                "geolocation", "google_maps_url", "venue_page_url",
+                "description", "contact_phone", "contact_email",
+            ]
+        )
+    df.to_csv(cache_path, index=False)
+    logger.info(f"Saved {len(df)} venues to {cache_path}")
+    return cache_path

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
         description="Delay between requests in milliseconds",
     )
     js_wait_ms: int = Field(
-        default=5000,
+        default=15000,
         ge=0,
         le=35000,
         description="JavaScript rendering wait time in milliseconds (max 35000)",

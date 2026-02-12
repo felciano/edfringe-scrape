@@ -4,11 +4,19 @@ import datetime
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from bs4 import BeautifulSoup, Tag
 
-from .models import PerformanceDetail, ShowCard
+from .models import PerformanceDetail, ShowCard, ShowInfo, VenueInfo
+
+
+class ShowDetailResult(NamedTuple):
+    """Result from parsing a show detail page."""
+
+    performances: list[PerformanceDetail]
+    show_info: ShowInfo | None
+    venue_info: VenueInfo | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +209,190 @@ class NextDataParser:
         logger.debug(f"Parsed {len(performances)} performances from event data")
         return performances
 
+    @staticmethod
+    def parse_show_info(
+        event_data: dict[str, Any],
+        show_url: str = "",
+        show_name: str = "",
+    ) -> ShowInfo:
+        """Parse show metadata from event data.
+
+        Args:
+            event_data: Event data dict from __NEXT_DATA__
+            show_url: Show page URL
+            show_name: Show name
+
+        Returns:
+            ShowInfo with extracted metadata
+        """
+        description = event_data.get("description", "")
+
+        # Extract primary genre and sub-genres separately
+        genre = event_data.get("genre", "")
+        sub_genre_raw = event_data.get("subGenre", "")
+        subgenres = ""
+        if sub_genre_raw:
+            subgenres = ", ".join(
+                s.strip() for s in sub_genre_raw.split(",") if s.strip()
+            )
+
+        # Build attribute lookup from attributes array
+        attrs: dict[str, str] = {}
+        for attr in event_data.get("attributes", []):
+            key = attr.get("key", "")
+            value = attr.get("value", "")
+            if key and value:
+                attrs[key] = value
+
+        warnings = attrs.get("explicit_material", "")
+        age_suitability = attrs.get("age_range_guidance", "")
+
+        # Social links from attributes
+        social_keys = [
+            "website",
+            "facebook",
+            "instagram",
+            "tiktok",
+            "youtube",
+            "twitter",
+            "bluesky",
+            "mastodon",
+        ]
+        socials: dict[str, str] = {}
+        for key in social_keys:
+            socials[key] = attrs.get(key, "")
+
+        # Fallback to socialLinks array
+        for link in event_data.get("socialLinks", []):
+            link_type = (link.get("type") or "").lower()
+            link_url = link.get("url", "")
+            if link_type in social_keys and not socials.get(link_type) and link_url:
+                socials[link_type] = link_url
+
+        # Extract image URL (prefer "Large", fall back to first available)
+        image_url = ""
+        images = event_data.get("images", [])
+        for img in images:
+            if img.get("imageType") == "Large":
+                image_url = img.get("url", "")
+                break
+        if not image_url and images:
+            image_url = images[0].get("url", "")
+
+        return ShowInfo(
+            show_url=show_url,
+            show_name=show_name,
+            genre=genre,
+            subgenres=subgenres,
+            description=description,
+            warnings=warnings,
+            age_suitability=age_suitability,
+            image_url=image_url,
+            **socials,
+        )
+
+    @staticmethod
+    def parse_venue_info(
+        event_data: dict[str, Any],
+        base_url: str = "https://www.edfringe.com",
+    ) -> VenueInfo | None:
+        """Parse venue information from event data.
+
+        Args:
+            event_data: Event data dict from __NEXT_DATA__
+            base_url: Site base URL for constructing venue page URL
+
+        Returns:
+            VenueInfo or None if no venue data found
+        """
+        venues = event_data.get("venues", [])
+        if not venues:
+            return None
+
+        venue = venues[0]
+        venue_code = venue.get("venueCode", "")
+        venue_name = venue.get("title", "")
+        slug = venue.get("slug", "")
+        description = venue.get("description", "")
+        postcode = venue.get("postCode", "")
+        geolocation = venue.get("geoLocation", "")
+
+        address_parts = [
+            venue.get("address1", ""),
+            venue.get("address2", ""),
+        ]
+        address = ", ".join(p for p in address_parts if p)
+
+        google_maps_url = ""
+        if geolocation:
+            google_maps_url = (
+                f"https://www.google.com/maps/dir/"
+                f"?api=1&destination={geolocation}"
+            )
+
+        venue_page_url = ""
+        if slug:
+            venue_page_url = f"{base_url}/venues/{slug}"
+
+        return VenueInfo(
+            venue_code=venue_code,
+            venue_name=venue_name,
+            address=address,
+            postcode=postcode,
+            geolocation=geolocation,
+            google_maps_url=google_maps_url,
+            venue_page_url=venue_page_url,
+            description=description,
+        )
+
+    @staticmethod
+    def extract_venue_page_data(html: str) -> dict[str, Any] | None:
+        """Extract venue data from venue detail page.
+
+        Args:
+            html: Venue page HTML content
+
+        Returns:
+            Venue data dict or None if not found
+        """
+        next_data = NextDataParser.extract_next_data(html)
+        if not next_data:
+            return None
+
+        try:
+            queries = (
+                next_data.get("props", {})
+                .get("pageProps", {})
+                .get("initialState", {})
+                .get("apiPublic", {})
+                .get("queries", {})
+            )
+
+            for key, val in queries.items():
+                if "Venue" in key and isinstance(val, dict) and "data" in val:
+                    return val["data"].get("venue")
+
+            return None
+        except (KeyError, TypeError) as e:
+            logger.debug(f"Failed to extract venue data: {e}")
+            return None
+
+    @staticmethod
+    def parse_venue_contact(
+        venue_page_data: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Parse contact details from venue page data.
+
+        Args:
+            venue_page_data: Venue data dict from venue detail page
+
+        Returns:
+            Tuple of (contact_phone, contact_email)
+        """
+        contact_phone = venue_page_data.get("contactPhone", "") or ""
+        contact_email = venue_page_data.get("contactEmail", "") or ""
+        return contact_phone, contact_email
+
 
 class FringeParser:
     """Parser for Edinburgh Fringe HTML pages.
@@ -282,31 +474,48 @@ class FringeParser:
             date_block_html=date_html,
         )
 
-    def parse_show_detail(self, html: str) -> list[PerformanceDetail]:
-        """Parse performance details from show detail page.
+    def parse_show_detail(
+        self,
+        html: str,
+        show_url: str = "",
+        show_name: str = "",
+    ) -> ShowDetailResult:
+        """Parse performance details and show info from show detail page.
 
         First attempts to extract from __NEXT_DATA__ JSON (preferred),
         then falls back to HTML parsing if needed.
 
         Args:
             html: HTML content of show detail page
+            show_url: Show page URL (for ShowInfo)
+            show_name: Show name (for ShowInfo)
 
         Returns:
-            List of PerformanceDetail objects
+            ShowDetailResult with performances and show info
         """
         # Try JSON extraction first (more reliable)
         event_data = NextDataParser.extract_event_data(html)
         if event_data:
             performances = NextDataParser.parse_performances(event_data)
+            show_info = NextDataParser.parse_show_info(
+                event_data, show_url=show_url, show_name=show_name
+            )
+            venue_info = NextDataParser.parse_venue_info(event_data)
             if performances:
                 logger.info(
                     f"Extracted {len(performances)} performances from __NEXT_DATA__"
                 )
-                return performances
+                return ShowDetailResult(
+                    performances=performances,
+                    show_info=show_info,
+                    venue_info=venue_info,
+                )
 
         # Fall back to HTML parsing
         logger.debug("Falling back to HTML parsing for performances")
-        return self._parse_show_detail_html(html)
+        return ShowDetailResult(
+            performances=self._parse_show_detail_html(html), show_info=None
+        )
 
     def _parse_show_detail_html(self, html: str) -> list[PerformanceDetail]:
         """Parse performance details from HTML (fallback method).

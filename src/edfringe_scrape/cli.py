@@ -9,7 +9,17 @@ import pandas as pd
 
 from .config import get_settings
 from .converter import FringeConverter, save_all_formats
-from .core import FringeScraper, ensure_output_dir, save_raw_csv, shows_to_dataframe
+from .core import (
+    FringeScraper,
+    collect_venues,
+    ensure_output_dir,
+    load_venue_cache,
+    save_raw_csv,
+    save_show_info_csv,
+    save_venue_cache,
+    show_info_to_dataframe,
+    shows_to_dataframe,
+)
 from .email_sender import send_email
 from .models import Genre
 from .scraper import ScrapingDogError
@@ -122,7 +132,7 @@ def scrape(
     genre_enum = Genre(genre.upper())
 
     output_dir = output if output else Path(settings.output_dir)
-    ensure_output_dir(settings)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     scrape_start_time = datetime.now()
 
@@ -176,8 +186,76 @@ def scrape(
         output_path = save_raw_csv(df, output_dir, genre_enum.value)
         click.echo(f"Saved to: {output_path}")
 
+        # Save show info CSV
+        info_df = show_info_to_dataframe(shows)
+        if not info_df.empty:
+            info_path = save_show_info_csv(info_df, output_dir, genre_enum.value)
+            click.echo(f"Saved show info to: {info_path}")
+
         perf_count = sum(len(s.performances) for s in shows)
         click.echo(f"Total performances: {perf_count}")
+
+        # Venue info extraction with caching
+        venue_cache_path = output_dir / "venue-info.csv"
+        scraped_venues = collect_venues(shows)
+        cached_venues = load_venue_cache(venue_cache_path)
+        cached_codes = set(cached_venues.keys())
+        new_codes = set(scraped_venues.keys()) - cached_codes
+
+        if new_codes:
+            click.echo(f"\nFetching venue details for {len(new_codes)} new venues...")
+            new_venues = {
+                c: v for c, v in scraped_venues.items() if c in new_codes
+            }
+            with click.progressbar(
+                list(new_venues.keys()),
+                label="  Venues",
+                show_pos=True,
+                item_show_func=lambda c: (
+                    new_venues[c].venue_name[:30] if c and c in new_venues else ""
+                ),
+            ) as codes:
+                for code in codes:
+                    venue = new_venues[code]
+                    if venue.venue_page_url:
+                        try:
+                            response = scraper.client.fetch_page(
+                                venue.venue_page_url, dynamic=True
+                            )
+                            from .parser import NextDataParser
+
+                            venue_page_data = (
+                                NextDataParser.extract_venue_page_data(
+                                    response.html
+                                )
+                            )
+                            if venue_page_data:
+                                phone, email = (
+                                    NextDataParser.parse_venue_contact(
+                                        venue_page_data
+                                    )
+                                )
+                                new_venues[code] = venue.model_copy(
+                                    update={
+                                        "contact_phone": phone,
+                                        "contact_email": email,
+                                    }
+                                )
+                        except Exception:
+                            pass  # logged at lower level
+
+            cached_venues.update(new_venues)
+        else:
+            # Merge any venue info from scrape (no new fetches needed)
+            for code, venue in scraped_venues.items():
+                if code not in cached_venues:
+                    cached_venues[code] = venue
+
+        save_venue_cache(cached_venues, venue_cache_path)
+        click.echo(
+            f"Venue info: {len(cached_venues)} venues "
+            f"({len(new_codes)} new, fetched {len(new_codes)} venue pages)"
+        )
 
     except ScrapingDogError as e:
         raise click.ClickException(f"Scraping error: {e}") from e
@@ -415,6 +493,7 @@ def daily_snapshot(
 
     # Scrape all genres
     all_dfs = []
+    all_shows = []
     scraper = FringeScraper(settings)
 
     for genre_str in genre_list:
@@ -439,6 +518,8 @@ def daily_snapshot(
                     for card in cards:
                         show = scraper.fetch_show_with_details(card, genre_enum)
                         shows.append(show)
+
+                all_shows.extend(shows)
 
                 source_url = (
                     f"{settings.base_url}/tickets/whats-on?search=true&genres={genre_str}"
@@ -468,6 +549,75 @@ def daily_snapshot(
 
     click.echo(f"Saved snapshot: {snapshot_path}")
     click.echo(f"  Total: {len(combined_df)} performances")
+
+    # Save show info CSV
+    info_df = show_info_to_dataframe(all_shows)
+    if not info_df.empty:
+        info_path = snapshot_dir / f"{date_str}-fringe-show-info.csv"
+        info_df.to_csv(info_path, index=False)
+        click.echo(f"Saved show info: {info_path} ({len(info_df)} shows)")
+
+    # Venue info extraction with caching
+    venue_cache_path = snapshot_dir / "venue-info.csv"
+    scraped_venues = collect_venues(all_shows)
+    cached_venues = load_venue_cache(venue_cache_path)
+    cached_codes = set(cached_venues.keys())
+    new_codes = set(scraped_venues.keys()) - cached_codes
+
+    if new_codes:
+        click.echo(f"Fetching venue details for {len(new_codes)} new venues...")
+        new_venues = {
+            c: v for c, v in scraped_venues.items() if c in new_codes
+        }
+        with click.progressbar(
+            list(new_venues.keys()),
+            label="  Venues",
+            show_pos=True,
+            item_show_func=lambda c: (
+                new_venues[c].venue_name[:30] if c and c in new_venues else ""
+            ),
+        ) as codes:
+            for code in codes:
+                venue = new_venues[code]
+                if venue.venue_page_url:
+                    try:
+                        response = scraper.client.fetch_page(
+                            venue.venue_page_url, dynamic=True
+                        )
+                        from .parser import NextDataParser
+
+                        venue_page_data = (
+                            NextDataParser.extract_venue_page_data(
+                                response.html
+                            )
+                        )
+                        if venue_page_data:
+                            phone, email = (
+                                NextDataParser.parse_venue_contact(
+                                    venue_page_data
+                                )
+                            )
+                            new_venues[code] = venue.model_copy(
+                                update={
+                                    "contact_phone": phone,
+                                    "contact_email": email,
+                                }
+                            )
+                    except Exception:
+                        pass  # logged at lower level
+
+        cached_venues.update(new_venues)
+    else:
+        for code, venue in scraped_venues.items():
+            if code not in cached_venues:
+                cached_venues[code] = venue
+
+    save_venue_cache(cached_venues, venue_cache_path)
+    click.echo(
+        f"Venue info: {len(cached_venues)} venues "
+        f"({len(new_codes)} new, fetched {len(new_codes)} venue pages)"
+    )
+
     click.echo("")
 
     # Compare with previous snapshot
