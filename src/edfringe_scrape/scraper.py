@@ -14,8 +14,12 @@ from .models import ScrapingDogResponse
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUS_CODES = {408, 410, 429, 500, 502, 503, 504}
+_CLOUDFLARE_ERROR_MARKER = "scrapingdog.com |"
 
 SCRAPINGDOG_BASE_URL = "https://api.scrapingdog.com/scrape"
+
+# Max characters of response text to include in error messages
+_ERROR_TEXT_LIMIT = 200
 
 
 class ScrapingDogError(Exception):
@@ -98,25 +102,22 @@ class ScrapingDogClient:
 
         max_retries = self.settings.max_retries
 
-        def _log_final_failure(retry_state: tenacity.RetryCallState) -> None:
-            """Log a warning only on the last retry before giving up."""
-            if retry_state.attempt_number >= max_retries:
-                exc = retry_state.outcome.exception()  # type: ignore[union-attr]
-                logger.warning(
-                    "Request failed after %d attempts, data may be lost: %s",
-                    retry_state.attempt_number,
-                    exc,
-                )
-
         retryer = tenacity.Retrying(
             stop=tenacity.stop_after_attempt(max_retries),
             wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
             retry=tenacity.retry_if_exception(_is_retryable),
-            before_sleep=_log_final_failure,
             reraise=True,
         )
 
-        return retryer(self._do_fetch, params=params, dynamic=dynamic)
+        try:
+            return retryer(self._do_fetch, params=params, dynamic=dynamic)
+        except ScrapingDogError:
+            logger.warning(
+                "Request failed after %d attempts, data may be lost: %s",
+                max_retries,
+                url,
+            )
+            raise
 
     def _do_fetch(
         self,
@@ -139,19 +140,31 @@ class ScrapingDogClient:
             with httpx.Client(timeout=60.0) as client:
                 response = client.get(SCRAPINGDOG_BASE_URL, params=params)
 
-            if response.status_code != 200:
+            status = response.status_code
+            text = response.text
+            snippet = text[:_ERROR_TEXT_LIMIT]
+
+            if status != 200:
                 raise ScrapingDogError(
-                    f"API returned status {response.status_code}: "
-                    f"{response.text}",
-                    status_code=response.status_code,
+                    f"API returned status {status}: {snippet}",
+                    status_code=status,
+                )
+
+            # Detect Cloudflare error pages returned with 200 status
+            if _CLOUDFLARE_ERROR_MARKER in text[:500]:
+                match = re.search(r"Error code (\d+)", text[:1000])
+                cf_status = int(match.group(1)) if match else 502
+                raise ScrapingDogError(
+                    f"Proxy error (Cloudflare {cf_status}): {snippet}",
+                    status_code=cf_status,
                 )
 
             credits_used = 5 if dynamic else 1
             logger.debug(f"Fetched successfully, ~{credits_used} credits used")
 
             return ScrapingDogResponse(
-                html=response.text,
-                status_code=response.status_code,
+                html=text,
+                status_code=status,
                 credits_used=credits_used,
             )
 

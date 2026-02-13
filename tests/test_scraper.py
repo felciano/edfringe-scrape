@@ -270,3 +270,109 @@ class TestFetchPageRetry:
 
         assert result.status_code == 200
         assert mock_client.get.call_count == 2
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_cloudflare_error_page_is_retried(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that Cloudflare error pages with HTTP 200 are retried."""
+        cloudflare_html = (
+            "<html><head>"
+            "<title>scrapingdog.com | 502: Bad gateway</title>"
+            "</head><body>Error code 502</body></html>"
+        )
+        mock_client = MagicMock()
+        mock_client.get.side_effect = [
+            _mock_response(status_code=200, text=cloudflare_html),
+            _mock_response(status_code=200, text="<html>ok</html>"),
+        ]
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        result = client.fetch_page("https://example.com")
+
+        assert result.status_code == 200
+        assert result.html == "<html>ok</html>"
+        assert mock_client.get.call_count == 2
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_cloudflare_error_exhausted_raises(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that persistent Cloudflare errors raise after retries."""
+        cloudflare_html = (
+            "<html><head>"
+            "<title>scrapingdog.com | 502: Bad gateway</title>"
+            "</head><body>Error code 502</body></html>"
+        )
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response(
+            status_code=200, text=cloudflare_html
+        )
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client(max_retries=2)
+        with pytest.raises(ScrapingDogError, match="Cloudflare 502"):
+            client.fetch_page("https://example.com")
+
+        assert mock_client.get.call_count == 2
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_error_message_truncated(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that long response text is truncated in error messages."""
+        long_html = "X" * 1000
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response(
+            status_code=404, text=long_html
+        )
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        with pytest.raises(ScrapingDogError) as exc_info:
+            client.fetch_page("https://example.com")
+
+        assert len(str(exc_info.value)) < 300
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_exhausted_retries_logs_warning(
+        self, mock_client_cls: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that exhausted retries log a warning with the URL."""
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response(
+            status_code=500, text="Server Error"
+        )
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client(max_retries=2)
+        with pytest.raises(ScrapingDogError):
+            client.fetch_page("https://example.com/test-page")
+
+        warning_logs = [
+            r for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert len(warning_logs) == 1
+        assert "data may be lost" in warning_logs[0].message
+        assert "example.com/test-page" in warning_logs[0].message
