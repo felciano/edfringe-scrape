@@ -6,11 +6,14 @@ import re
 import time
 
 import httpx
+import tenacity
 
 from .config import Settings
 from .models import ScrapingDogResponse
 
 logger = logging.getLogger(__name__)
+
+RETRYABLE_STATUS_CODES = {408, 410, 429, 500, 502, 503, 504}
 
 SCRAPINGDOG_BASE_URL = "https://api.scrapingdog.com/scrape"
 
@@ -21,6 +24,20 @@ class ScrapingDogError(Exception):
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Check if an exception is retryable.
+
+    Args:
+        exc: The exception to check
+
+    Returns:
+        True if the request should be retried
+    """
+    if isinstance(exc, ScrapingDogError):
+        return exc.status_code in RETRYABLE_STATUS_CODES
+    return False
 
 
 class ScrapingDogClient:
@@ -49,6 +66,9 @@ class ScrapingDogClient:
     ) -> ScrapingDogResponse:
         """Fetch a page using Scraping Dog API.
 
+        Retries transient errors (timeouts, 5xx, 429) with exponential
+        backoff. Non-retryable errors (4xx client errors) fail immediately.
+
         Args:
             url: URL to fetch
             wait_ms: JavaScript wait time (uses settings.js_wait_ms if None)
@@ -58,7 +78,7 @@ class ScrapingDogClient:
             ScrapingDogResponse with HTML content
 
         Raises:
-            ScrapingDogError: If API request fails
+            ScrapingDogError: If API request fails after all retries
         """
         self._rate_limit()
 
@@ -76,13 +96,53 @@ class ScrapingDogClient:
 
         logger.debug(f"Fetching: {url} (dynamic={dynamic}, wait={wait_ms}ms)")
 
+        max_retries = self.settings.max_retries
+
+        def _log_final_failure(retry_state: tenacity.RetryCallState) -> None:
+            """Log a warning only on the last retry before giving up."""
+            if retry_state.attempt_number >= max_retries:
+                exc = retry_state.outcome.exception()  # type: ignore[union-attr]
+                logger.warning(
+                    "Request failed after %d attempts, data may be lost: %s",
+                    retry_state.attempt_number,
+                    exc,
+                )
+
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(max_retries),
+            wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
+            retry=tenacity.retry_if_exception(_is_retryable),
+            before_sleep=_log_final_failure,
+            reraise=True,
+        )
+
+        return retryer(self._do_fetch, params=params, dynamic=dynamic)
+
+    def _do_fetch(
+        self,
+        params: dict[str, str],
+        dynamic: bool,
+    ) -> ScrapingDogResponse:
+        """Execute a single fetch attempt.
+
+        Args:
+            params: Query parameters for the API request
+            dynamic: Whether JavaScript rendering is enabled
+
+        Returns:
+            ScrapingDogResponse with HTML content
+
+        Raises:
+            ScrapingDogError: If API request fails
+        """
         try:
             with httpx.Client(timeout=60.0) as client:
                 response = client.get(SCRAPINGDOG_BASE_URL, params=params)
 
             if response.status_code != 200:
                 raise ScrapingDogError(
-                    f"API returned status {response.status_code}: {response.text}",
+                    f"API returned status {response.status_code}: "
+                    f"{response.text}",
                     status_code=response.status_code,
                 )
 

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
         le=35000,
         description="JavaScript rendering wait time in milliseconds (max 35000)",
     )
+    max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max retry attempts for transient API errors",
+    )
     default_year: int = Field(
         default=2026,
         description="Default year for date parsing",

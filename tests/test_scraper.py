@@ -1,9 +1,18 @@
 """Tests for Scraping Dog client and API discovery."""
 
+from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
 
 from edfringe_scrape.config import Settings
-from edfringe_scrape.scraper import APIDiscovery, ScrapingDogClient, ScrapingDogError
+from edfringe_scrape.scraper import (
+    RETRYABLE_STATUS_CODES,
+    APIDiscovery,
+    ScrapingDogClient,
+    ScrapingDogError,
+    _is_retryable,
+)
 
 
 class TestScrapingDogClient:
@@ -105,3 +114,159 @@ class TestScrapingDogError:
         error = ScrapingDogError("Rate limited", status_code=429)
         assert str(error) == "Rate limited"
         assert error.status_code == 429
+
+
+class TestIsRetryable:
+    """Test _is_retryable helper."""
+
+    @pytest.mark.parametrize("status_code", sorted(RETRYABLE_STATUS_CODES))
+    def test_retryable_status_codes(self, status_code: int) -> None:
+        """Test that retryable status codes return True."""
+        exc = ScrapingDogError("error", status_code=status_code)
+        assert _is_retryable(exc) is True
+
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+    def test_non_retryable_status_codes(self, status_code: int) -> None:
+        """Test that non-retryable status codes return False."""
+        exc = ScrapingDogError("error", status_code=status_code)
+        assert _is_retryable(exc) is False
+
+    def test_no_status_code(self) -> None:
+        """Test that errors without status code are not retryable."""
+        exc = ScrapingDogError("timeout error")
+        assert _is_retryable(exc) is False
+
+    def test_non_scraping_dog_error(self) -> None:
+        """Test that other exceptions are not retryable."""
+        assert _is_retryable(ValueError("bad")) is False
+
+
+def _make_client(max_retries: int = 3) -> ScrapingDogClient:
+    """Create a ScrapingDogClient with test settings."""
+    settings = Settings(
+        scrapingdog_api_key="test_key",
+        request_delay_ms=0,
+        max_retries=max_retries,
+    )
+    return ScrapingDogClient(settings)
+
+
+def _mock_response(
+    status_code: int = 200, text: str = "<html></html>"
+) -> MagicMock:
+    """Create a mock httpx.Response."""
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    resp.text = text
+    return resp
+
+
+class TestFetchPageRetry:
+    """Test retry behavior in fetch_page."""
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_success_no_retry(self, mock_client_cls: MagicMock) -> None:
+        """Test successful request does not retry."""
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response()
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        result = client.fetch_page("https://example.com")
+
+        assert result.status_code == 200
+        assert mock_client.get.call_count == 1
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_retryable_error_then_success(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that retryable error is retried and succeeds."""
+        mock_client = MagicMock()
+        mock_client.get.side_effect = [
+            _mock_response(status_code=502, text="Bad Gateway"),
+            _mock_response(status_code=200, text="<html>ok</html>"),
+        ]
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        result = client.fetch_page("https://example.com")
+
+        assert result.status_code == 200
+        assert result.html == "<html>ok</html>"
+        assert mock_client.get.call_count == 2
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_max_retries_exhausted(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that error is raised after max retries exhausted."""
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response(
+            status_code=500, text="Server Error"
+        )
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client(max_retries=2)
+        with pytest.raises(ScrapingDogError, match="status 500"):
+            client.fetch_page("https://example.com")
+
+        assert mock_client.get.call_count == 2
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_non_retryable_error_fails_immediately(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        """Test that non-retryable errors fail without retry."""
+        mock_client = MagicMock()
+        mock_client.get.return_value = _mock_response(
+            status_code=404, text="Not Found"
+        )
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        with pytest.raises(ScrapingDogError, match="status 404"):
+            client.fetch_page("https://example.com")
+
+        assert mock_client.get.call_count == 1
+
+    @patch("edfringe_scrape.scraper.httpx.Client")
+    def test_429_is_retried(self, mock_client_cls: MagicMock) -> None:
+        """Test that 429 rate limit errors are retried."""
+        mock_client = MagicMock()
+        mock_client.get.side_effect = [
+            _mock_response(status_code=429, text="Rate limited"),
+            _mock_response(status_code=200, text="<html>ok</html>"),
+        ]
+        mock_client_cls.return_value.__enter__ = MagicMock(
+            return_value=mock_client
+        )
+        mock_client_cls.return_value.__exit__ = MagicMock(
+            return_value=False
+        )
+
+        client = _make_client()
+        result = client.fetch_page("https://example.com")
+
+        assert result.status_code == 200
+        assert mock_client.get.call_count == 2
