@@ -308,7 +308,7 @@ class TestFestivalPlannerExport:
     def test_parse_performer_producer_show_with_production_company(
         self, converter: FringeConverter
     ) -> None:
-        """Test parsing when presenter is a production company."""
+        """Test parsing when performer is a production company."""
         # Production company with performer in title
         performer, producer, show = converter._parse_performer_producer_show(
             "Impatient Productions", "Mark Watson: Before It Overtakes Us"
@@ -328,8 +328,8 @@ class TestFestivalPlannerExport:
     def test_parse_performer_producer_show_with_performer(
         self, converter: FringeConverter
     ) -> None:
-        """Test parsing when presenter is the actual performer."""
-        # Performer name in presenter, no colon in title
+        """Test parsing when performer field contains the actual performer."""
+        # Performer name in performer field, no colon in title
         performer, producer, show = converter._parse_performer_producer_show(
             "John Smith", "The Funniest Hour"
         )
@@ -337,7 +337,7 @@ class TestFestivalPlannerExport:
         assert producer == ""
         assert show == "The Funniest Hour"
 
-        # Performer name in presenter, matching name in title
+        # Performer name in performer field, matching name in title
         performer, producer, show = converter._parse_performer_producer_show(
             "Mark Watson", "Mark Watson: Before It Overtakes Us"
         )
@@ -369,7 +369,7 @@ class TestFestivalPlannerExport:
 
     def test_multiple_performers(self, converter: FringeConverter) -> None:
         """Test that multiple performers are combined comma-delimited."""
-        # Case: presenter is a performer, and title has a different performer
+        # Case: performer field has one name, and title has a different performer
         performer, producer, show = converter._parse_performer_producer_show(
             "Jane Doe", "John Smith: The Big Show"
         )
@@ -377,7 +377,7 @@ class TestFestivalPlannerExport:
         assert producer == ""
         assert show == "The Big Show"
 
-    def test_same_performer_in_title_and_presenter(
+    def test_same_performer_in_title_and_performer_field(
         self, converter: FringeConverter
     ) -> None:
         """Test that same performer is not duplicated."""

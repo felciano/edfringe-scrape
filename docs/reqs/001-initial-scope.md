@@ -10,7 +10,7 @@ Planning attendance at the Edinburgh Festival Fringe requires tracking thousands
 
 ## Goals
 - [ ] Scrape show listings including name, performer, venue, and link
-- [ ] Scrape performance schedules with dates, times, and availability
+- [ ] Scrape performances with dates, times, and availability
 - [ ] Export data to CSV for analysis in spreadsheets
 - [ ] Provide CLI interface for running scrapes
 

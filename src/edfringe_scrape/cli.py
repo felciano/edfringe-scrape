@@ -452,7 +452,7 @@ def daily_snapshot(
     compare: bool,
     email: bool,
 ) -> None:
-    """Take a daily snapshot of the Fringe schedule and report changes.
+    """Take a daily snapshot of Fringe performances and report changes.
 
     Scrapes specified genres, saves a timestamped snapshot, compares with
     the previous snapshot, and optionally emails the changes.

@@ -236,15 +236,15 @@ class FringeConverter:
             availability = self._map_availability(raw_availability)
 
             # Parse performer/producer/show_name
-            raw_presenter = row.get("show-performer", "")
+            raw_performer = row.get("show-performer", "")
             raw_title = row.get("show-name", "")
 
             if smart_parsing:
                 performer, producer, show_name = self._parse_performer_producer_show(
-                    raw_presenter, raw_title
+                    raw_performer, raw_title
                 )
             else:
-                performer = raw_presenter
+                performer = raw_performer
                 producer = ""
                 show_name = raw_title
 
@@ -318,7 +318,7 @@ class FringeConverter:
         """Detect if a name is likely a production company rather than a performer.
 
         Args:
-            name: The presenter/performer name to check
+            name: The performer name to check
 
         Returns:
             True if the name appears to be a production company
@@ -492,18 +492,18 @@ class FringeConverter:
         return False
 
     def _parse_performer_producer_show(
-        self, presenter: str, title: str
+        self, raw_performer: str, title: str
     ) -> tuple[str, str, str]:
         """Intelligently parse performer, producer, and show name.
 
         Logic:
-        1. If presenter is a production company, it becomes producer
+        1. If performer is a production company, it becomes producer
         2. If title has "Performer: Show Title" format, extract performer from title
-        3. Otherwise, presenter is the performer
+        3. Otherwise, performer field is used directly
         4. If multiple performers are identified, combine them comma-delimited
 
         Args:
-            presenter: The show-performer field from scraped data
+            raw_performer: The show-performer field from scraped data
             title: The show-name field from scraped data
 
         Returns:
@@ -513,9 +513,9 @@ class FringeConverter:
         producer = ""
         show_name = title
 
-        # First, check if presenter is a production company
-        if self._is_production_company(presenter):
-            producer = presenter
+        # First, check if raw_performer is a production company
+        if self._is_production_company(raw_performer):
+            producer = raw_performer
 
             # Try to extract performer from title
             extracted_performer, remaining_title = self._extract_performer_from_title(
@@ -526,24 +526,24 @@ class FringeConverter:
                 show_name = remaining_title
             # else: performers stays empty, show_name stays as original title
         else:
-            # Presenter is likely the performer
-            if presenter:
-                performers.append(presenter)
+            # raw_performer is likely the actual performer
+            if raw_performer:
+                performers.append(raw_performer)
 
             # Still check if title has embedded performer (might be different)
             extracted_performer, remaining_title = self._extract_performer_from_title(
                 title
             )
             if extracted_performer:
-                # Check if extracted performer is different from presenter
-                if not presenter:
+                # Check if extracted performer is different from raw_performer
+                if not raw_performer:
                     performers.append(extracted_performer)
                     show_name = remaining_title
-                elif extracted_performer.lower() in presenter.lower():
+                elif extracted_performer.lower() in raw_performer.lower():
                     # Same performer, just use the cleaned title
                     show_name = remaining_title
-                elif presenter.lower() in extracted_performer.lower():
-                    # Presenter is subset of extracted (e.g., "John" vs "John Smith")
+                elif raw_performer.lower() in extracted_performer.lower():
+                    # raw_performer is subset of extracted (e.g., "John" vs "John Smith")
                     # Use the more complete name
                     performers = [extracted_performer]
                     show_name = remaining_title

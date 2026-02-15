@@ -1,4 +1,4 @@
-"""Snapshot comparison for tracking Edinburgh Fringe schedule changes."""
+"""Snapshot comparison for tracking Edinburgh Fringe performance changes."""
 
 import logging
 from dataclasses import dataclass, field
