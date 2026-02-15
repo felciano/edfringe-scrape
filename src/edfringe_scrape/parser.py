@@ -451,6 +451,9 @@ class FringeParser:
             url = url[0] if url else ""
 
         if url and not url.startswith("http"):
+            # Card hrefs use /whats-on/... but canonical URLs are /tickets/whats-on/...
+            if url.startswith("/whats-on/"):
+                url = f"/tickets{url}"
             url = f"https://www.edfringe.com{url}"
 
         performer_el = element.select_one(

@@ -91,6 +91,27 @@ class TestFringeParser:
         assert cards[0].duration == "1hr 15mins"
         assert "test-show" in cards[0].url
 
+    def test_parse_search_results_url_has_tickets_prefix(
+        self, parser: FringeParser
+    ) -> None:
+        """Test that /whats-on/ hrefs get /tickets/ prefix."""
+        html = """
+        <html>
+        <body>
+            <div class="event-listing_eventListingItem__abc123">
+                <a class="event-card-search_eventTitle__xyz" href="/whats-on/frank-sanazi-unleashed">
+                    Frank Sanazi: Unleashed
+                </a>
+            </div>
+        </body>
+        </html>
+        """
+        cards = parser.parse_search_results(html)
+        assert len(cards) == 1
+        assert cards[0].url == (
+            "https://www.edfringe.com/tickets/whats-on/frank-sanazi-unleashed"
+        )
+
     def test_parse_search_results_multiple(self, parser: FringeParser) -> None:
         """Test parsing multiple show cards."""
         html = """
