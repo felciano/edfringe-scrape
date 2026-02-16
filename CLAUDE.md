@@ -34,9 +34,7 @@ uv run ruff check . --fix  # Lint and fix
 
 ## Key Commands
 
-- `update` — Maintain canonical current-state files in `data/current/` (supports `--recent` incremental and `--full` modes)
-- `scrape` — Scrape a single genre to date-stamped files
-- `daily-snapshot` — Take a timestamped snapshot with optional email notifications
+- `update` — Scrape genres, save timestamped snapshot to `data/snapshots/`, merge into canonical files in `data/current/`, optionally compare with previous snapshot and email a report (supports `--recent`/`--full`, `--compare`/`--no-compare`, `--email`)
 - `convert` — Transform raw CSV to cleaned/summary/wide formats
 - `export` — Export to Festival Planner format
 - `compare` — Diff two snapshots

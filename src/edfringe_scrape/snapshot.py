@@ -254,7 +254,7 @@ def find_latest_snapshot(snapshot_dir: Path, exclude_date: str | None = None) ->
     if not snapshot_dir.exists():
         return None
 
-    snapshots = sorted(snapshot_dir.glob("*.csv"), reverse=True)
+    snapshots = sorted(snapshot_dir.glob("*-snapshot.csv"), reverse=True)
 
     for snapshot in snapshots:
         if exclude_date and exclude_date in snapshot.name:

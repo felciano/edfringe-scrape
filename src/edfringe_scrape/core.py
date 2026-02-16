@@ -484,6 +484,33 @@ def save_show_info_csv(
     return output_path
 
 
+def save_snapshot_csv(
+    df: pd.DataFrame,
+    snapshot_dir: Path,
+    date_str: str,
+    mode: str,
+    suffix: str = "snapshot",
+) -> Path:
+    """Save a DataFrame as a timestamped snapshot CSV.
+
+    Args:
+        df: DataFrame to save
+        snapshot_dir: Directory for snapshot files
+        date_str: Date string (e.g. "2026-02-15")
+        mode: Scrape mode label ("full" or "recent")
+        suffix: File suffix (e.g. "snapshot" or "show-info")
+
+    Returns:
+        Path to saved file
+    """
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{date_str}-{mode}-{suffix}.csv"
+    path = snapshot_dir / filename
+    df.to_csv(path, index=False)
+    logger.info(f"Saved {len(df)} rows to {path}")
+    return path
+
+
 def collect_venues(shows: list[ScrapedShow]) -> dict[str, VenueInfo]:
     """Collect unique venues from scraped shows, deduped by venue_code.
 

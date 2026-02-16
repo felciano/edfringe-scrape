@@ -33,9 +33,13 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(cli, ["update", "--help"])
         assert result.exit_code == 0
-        assert "Update canonical current-state files" in result.output
+        assert "Update Fringe data" in result.output
         assert "--full" in result.output
         assert "--recent" in result.output
+        assert "--compare" in result.output
+        assert "--no-compare" in result.output
+        assert "--email" in result.output
+        assert "--no-email" in result.output
 
     def test_update_no_api_key(self) -> None:
         """Test update command fails without API key."""
